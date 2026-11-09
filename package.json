@@ -1,0 +1,42 @@
+{
+  "name": "kuku-promo-intelligence",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {"node":"22.x"},
+  "scripts": {
+    "dev": "concurrently -k \"tsx watch backend/src/server.ts\" \"vite --host 127.0.0.1\"",
+    "server": "tsx backend/src/server.ts",
+    "build": "tsc --noEmit && vite build",
+    "test": "tsx --test tests/*.test.ts",
+    "analyze": "tsx scripts/analyze.ts",
+    "import": "tsx scripts/import.ts",
+    "start": "tsx backend/src/server.ts"
+  },
+  "dependencies": {
+    "adm-zip": "^0.6.1",
+    "dotenv": "^17.2.0",
+    "express": "^5.1.0",
+    "lucide-react": "^0.468.0",
+    "mongodb": "^7.8.0",
+    "multer": "^2.0.2",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "zod": "^4.1.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.1.0",
+    "@types/adm-zip": "^0.5.7",
+    "@types/express": "^5.0.3",
+    "@types/multer": "^2.0.0",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.5.0",
+    "concurrently": "^9.2.0",
+    "tailwindcss": "^4.1.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.8.3",
+    "vite": "^6.3.0"
+  }
+}

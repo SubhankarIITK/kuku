@@ -1,0 +1,21 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {mkdir,mkdtemp,writeFile} from 'node:fs/promises';
+import path from 'node:path';
+import {createHash} from 'node:crypto';
+import AdmZip from 'adm-zip';
+import {rawOutputArchive} from '../backend/src/raw-export.js';
+import type {Run} from '../backend/src/types.js';
+test('raw ZIP preserves response bytes, includes run artifacts and excludes environment/temp files',async()=>{
+  await mkdir('tmp',{recursive:true});const workspace=await mkdtemp(path.resolve('tmp/raw-export-'));
+  const folder=path.join(workspace,'outputs','test-run');await mkdir(path.join(folder,'raw'),{recursive:true});
+  const raw=Buffer.from('{ "status": 200, "body": "unedited response\\n" }\r\n');
+  await writeFile(path.join(folder,'raw','response.json'),raw);await writeFile(path.join(folder,'promos.csv'),'rank,id\n1,test');
+  await writeFile(path.join(folder,'.env'),'GROQ_API_KEY=not-for-export');await writeFile(path.join(folder,'partial.json.tmp'),'incomplete');
+  const run={id:'test-run',datasetId:'dataset-a',manifest:{mode:'ai',model:'mock-test-only',status:'complete'},promos:[],baseline:[],candidates:[],evaluations:[],metrics:{},failures:[]} as Run;
+  const zip=new AdmZip(await rawOutputArchive(run,workspace)),names=zip.getEntries().map(e=>e.entryName);
+  assert.deepEqual(zip.readFile('test-run/raw/response.json'),raw);assert.ok(names.includes('test-run/promos.csv'));assert.ok(!names.some(n=>n.includes('.env')||n.endsWith('.tmp')));
+  const manifest=JSON.parse(zip.readAsText('test-run/download_manifest.json'));assert.equal(manifest.datasetId,'dataset-a');assert.equal(manifest.files.find((f:{path:string})=>f.path==='raw/response.json').sha256,createHash('sha256').update(raw).digest('hex'));
+  assert.match(zip.readAsText('test-run/DOWNLOAD_README.txt'),/Confidential/);
+});
+test('raw ZIP rejects run path traversal',async()=>{await assert.rejects(rawOutputArchive({id:'../private'} as Run),/Invalid run ID/);});

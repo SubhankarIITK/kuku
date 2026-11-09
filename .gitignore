@@ -1,0 +1,15 @@
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+data/
+outputs/
+output/
+tmp/
+*.zip
+*.pdf
+*.log
+__pycache__/
+submission/
+.vercel/

@@ -1,0 +1,22 @@
+import {read,save} from '../backend/src/storage.js';
+import {guardBoundary} from '../backend/src/boundaries.js';
+import {rank} from '../backend/src/engine.js';
+import {toCSV} from '../backend/src/pipeline.js';
+import {writeFile} from 'node:fs/promises';
+import {defaultWeights,type Dataset,type Promo,type Run} from '../backend/src/types.js';
+const runId=process.argv[2];if(!runId||!/^[\w-]+$/.test(runId))throw new Error('Supply a valid run ID');
+const run=await read<Run>(`outputs/${runId}/run.json`),ds=await read<Dataset>(`data/datasets/${run.datasetId}.json`);
+const raw=await read<Promo[]>(`outputs/${runId}/raw/advanced-suggestions.json`);const originalRankings=run.promos;
+const guarded=raw.map(p=>guardBoundary(p,ds.episodes,run.evaluations,(run.manifest.options as {weights:typeof defaultWeights}).weights));
+const guards=guarded.filter((p,i)=>p.id!==raw[i].id);
+run.promos=rank(guarded,(run.manifest.options as {weights:typeof defaultWeights}).weights);
+run.metrics.validPromos=run.promos.length;run.metrics.boundaryGuardsApplied=guards.length;
+run.failures.push(...guards.map(p=>({stage:'boundary_score_noise',candidateId:p.id,segments:p.segments,whySelected:'A model scored a sub-second alternative higher.',whyWeak:['No new narrative event evidence supported the claimed improvement.'],improvement:'Retained the original cut; inspect microtiming against footage.'})));
+run.metrics.failures=run.failures.length;run.manifest.postProcessingVersion='boundary-evidence-guard-v1';run.manifest.postProcessedAt=new Date().toISOString();
+const baselineRaw=await read<Promo[]>(`outputs/${runId}/raw/baseline-suggestions.json`);
+run.metrics.baselineEpisodeSuccesses=new Set(baselineRaw.map(p=>p.segments[0].episode)).size;
+if(run.manifest.mode==='ai'&&(Number(run.metrics.aiEpisodeSuccesses)<Number(run.metrics.episodesAttempted)||Number(run.metrics.baselineEpisodeSuccesses)<(run.metrics.baselineSampleEpisodes as number[]).length))run.manifest.status='partial';
+// Preserve initial processed ranking as well as all unedited raw model responses.
+await save(`outputs/${runId}/initial-rankings.json`,originalRankings);
+for(const [file,value]of Object.entries({'run.json':run,'promos.json':run.promos,'rankings.json':run.promos.map(p=>({id:p.id,rank:p.rank,score:p.score,diversityPenalty:p.diversityPenalty})),'evaluation.json':run.metrics,'run_manifest.json':run.manifest,'failures.json':run.failures}))await save(`outputs/${runId}/${file}`,value);
+await writeFile(`outputs/${runId}/promos.csv`,toCSV(run.promos));console.log(JSON.stringify({runId,boundaryGuardsApplied:guards.length,promos:run.promos.length}));
