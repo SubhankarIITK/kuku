@@ -36,6 +36,7 @@ export default function PromoRow({
             {p.evaluation.reason}
           </button>
           <span className="row-caption">
+            <span className="mobile-rank">Cut {p.rank} / </span>
             Episode {String(segment.episode).padStart(2, "0")} /{" "}
             {p.evaluation.source === "llm"
               ? "AI evaluation"

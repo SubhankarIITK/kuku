@@ -41,63 +41,70 @@ export default function EvaluationView({
       <div className="evaluation-grid">
         <section className="panel">
           <h2>Measured comparison</h2>
-          <table>
-            <thead>
-              <tr>
-                <th>Metric</th>
-                <th>Structured pipeline</th>
-                <th>Direct LLM</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td>Suggestions before ranking</td>
-                <td>{String(m.advancedSuggestions)} (all episodes)</td>
-                <td>
-                  {m.baselineSuggestions
-                    ? String(m.baselineSuggestions) + " (sample)"
-                    : "Not run"}
-                </td>
-              </tr>
-              <tr>
-                <td>Invalid suggestions</td>
-                <td>{String(m.advancedInvalid)}</td>
-                <td>
-                  {m.baselineSuggestions ? String(m.baselineInvalid) : "—"}
-                </td>
-              </tr>
-              <tr>
-                <td>Timestamp / evidence validity</td>
-                <td>
-                  {m.advancedValidityRate === null
-                    ? "—"
-                    : `${(Number(m.advancedValidityRate) * 100).toFixed(1)}%`}
-                </td>
-                <td>
-                  {m.baselineValidityRate === null
-                    ? "—"
-                    : `${(Number(m.baselineValidityRate) * 100).toFixed(1)}%`}
-                </td>
-              </tr>
-              <tr>
-                <td>Comparison sample episodes</td>
-                <td colSpan={2}>
-                  {Array.isArray(m.baselineSampleEpisodes)
-                    ? m.baselineSampleEpisodes.join(", ")
-                    : "Not recorded"}
-                </td>
-              </tr>
-              <tr>
-                <td>Human reviewed</td>
-                <td>{result?.reviews.length ?? 0}</td>
-                <td>Not collected</td>
-              </tr>
-              <tr>
-                <td>Quality improvement</td>
-                <td colSpan={2}>Unmeasured — human comparison pending</td>
-              </tr>
-            </tbody>
-          </table>
+          <div
+            className="table-scroll"
+            role="region"
+            aria-label="Measured baseline comparison"
+            tabIndex={0}
+          >
+            <table>
+              <thead>
+                <tr>
+                  <th>Metric</th>
+                  <th>Structured pipeline</th>
+                  <th>Direct LLM</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Suggestions before ranking</td>
+                  <td>{String(m.advancedSuggestions)} (all episodes)</td>
+                  <td>
+                    {m.baselineSuggestions
+                      ? String(m.baselineSuggestions) + " (sample)"
+                      : "Not run"}
+                  </td>
+                </tr>
+                <tr>
+                  <td>Invalid suggestions</td>
+                  <td>{String(m.advancedInvalid)}</td>
+                  <td>
+                    {m.baselineSuggestions ? String(m.baselineInvalid) : "—"}
+                  </td>
+                </tr>
+                <tr>
+                  <td>Timestamp / evidence validity</td>
+                  <td>
+                    {m.advancedValidityRate === null
+                      ? "—"
+                      : `${(Number(m.advancedValidityRate) * 100).toFixed(1)}%`}
+                  </td>
+                  <td>
+                    {m.baselineValidityRate === null
+                      ? "—"
+                      : `${(Number(m.baselineValidityRate) * 100).toFixed(1)}%`}
+                  </td>
+                </tr>
+                <tr>
+                  <td>Comparison sample episodes</td>
+                  <td colSpan={2}>
+                    {Array.isArray(m.baselineSampleEpisodes)
+                      ? m.baselineSampleEpisodes.join(", ")
+                      : "Not recorded"}
+                  </td>
+                </tr>
+                <tr>
+                  <td>Human reviewed</td>
+                  <td>{result?.reviews.length ?? 0}</td>
+                  <td>Not collected</td>
+                </tr>
+                <tr>
+                  <td>Quality improvement</td>
+                  <td colSpan={2}>Unmeasured — human comparison pending</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
           <p className="help">
             Advanced results include validation and bounded repair. Baseline
             invalidity is measured before rejection. Comparison uses only the

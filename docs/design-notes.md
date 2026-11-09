@@ -10,4 +10,6 @@ Primary actions use gold, selected navigation uses emerald and status colors dis
 
 Desktop uses a compact table; narrower layouts reflow each row into labeled source, score and review areas. Episode and review filters sit behind the Filters control; search and sorting stay visible. The existing inspector preserves the actual episode timeline and source evidence. The run-limitations notice has a working Open evaluation action.
 
+Phones below 768 px use labeled bottom navigation, two-column metrics, stacked search and action controls, and roomier cut rows. Navigation returns each view to the top. Form text stays at 16 px to avoid automatic input zoom, primary touch targets are at least 44 px, and safe-area spacing keeps controls clear of phone edges. The inspector fills the available screen height with independently scrolling content. The comparison table scrolls within its own region. Tablets retain the compact navigation with larger controls.
+
 Keyboard focus, selected-state semantics, export Escape/outside-click dismissal, rating pressed state, drawer focus management and reduced-motion support remain. TypeScript, production bundling and the existing synthetic workflow checks cover code and API regressions. Browser control is unavailable in this session, so rendered appearance and touch/keyboard interaction have not been visually exercised.

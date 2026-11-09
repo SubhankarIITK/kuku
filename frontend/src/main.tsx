@@ -33,6 +33,7 @@ import type {
 } from "../../backend/src/types";
 import { defaultWeights, criteria } from "../../backend/src/types";
 import "./style.css";
+import "./mobile.css";
 import PromoRow from "./components/PromoRow";
 import EvaluationView from "./components/EvaluationView";
 import Detail from "./components/Detail";
@@ -150,6 +151,10 @@ function App() {
     setToast(s);
     setTimeout(() => setToast(""), 4000);
   };
+  function navigate(next: string) {
+    setTab(next);
+    window.scrollTo({ top: 0, behavior: "auto" });
+  }
   function chooseDataset(id: string) {
     dsRef.current = id;
     setDsId(id);
@@ -363,7 +368,7 @@ function App() {
       setJob(r.job);
       setMode("ai");
       setLimit(1);
-      setTab("library");
+      navigate("library");
       notify(
         r.reused
           ? "This pack is already analyzed. Showing saved results."
@@ -387,7 +392,7 @@ function App() {
         post({ datasetId: dsId, mode, provider, model, limit, weights }),
       );
       setJob(j);
-      setTab("library");
+      navigate("library");
       notify(
         mode === "offline"
           ? "Creating your shortlist locally. No API calls."
@@ -397,7 +402,7 @@ function App() {
       const err = e as Error & { job?: Job };
       if (err.job?.datasetId === dsId) {
         setJob(err.job);
-        setTab("library");
+        navigate("library");
         notify("This screenplay is already being analyzed. Showing progress.");
       } else setError(err.message);
     } finally {
@@ -501,7 +506,7 @@ function App() {
           href="#"
           onClick={(e) => {
             e.preventDefault();
-            setTab("library");
+            navigate("library");
           }}
         >
           <span className="brandmark">k</span>
@@ -524,7 +529,7 @@ function App() {
                 aria-label={String(label)}
                 aria-current={tab === id ? "page" : undefined}
                 className={tab === id ? "nav active" : "nav"}
-                onClick={() => setTab(String(id))}
+                onClick={() => navigate(String(id))}
               >
                 <I size={18} />
                 <span>{String(label)}</span>
@@ -538,7 +543,7 @@ function App() {
           })}
         </nav>
         <div className="sidebar-note">
-          <button onClick={() => setTab("processing")}>
+          <button onClick={() => navigate("processing")}>
             <Upload size={16} /> Import screenplay
           </button>
           <p>ZIP / timestamped .txt</p>
@@ -557,7 +562,19 @@ function App() {
       </aside>
       <div className="workspace">
         <header className="topbar">
-          <div>
+          <a
+            className="mobile-brand"
+            href="#"
+            aria-label="Kuku promo library"
+            onClick={(e) => {
+              e.preventDefault();
+              navigate("library");
+            }}
+          >
+            <span className="mobile-brandmark">k</span>kuku
+            <span className="branddot">.</span>
+          </a>
+          <div className="breadcrumbs">
             <span className="crumb">Workspace</span>
             <ChevronRight size={13} />
             <span>
@@ -652,7 +669,7 @@ function App() {
               {tab !== "processing" && (
                 <button
                   className="button primary"
-                  onClick={() => setTab("processing")}
+                  onClick={() => navigate("processing")}
                 >
                   <Upload size={16} /> Import scripts
                 </button>
@@ -787,7 +804,7 @@ function App() {
                     ) : (
                       <button
                         className="button"
-                        onClick={() => setTab("processing")}
+                        onClick={() => navigate("processing")}
                       >
                         Continue in processing
                       </button>
@@ -836,7 +853,7 @@ function App() {
                   </div>
                   <button
                     className="text-button"
-                    onClick={() => setTab("evaluation")}
+                    onClick={() => navigate("evaluation")}
                   >
                     Open evaluation <ArrowRight size={15} />
                   </button>
@@ -1051,7 +1068,7 @@ function App() {
                         onClick={() =>
                           result?.promos.length
                             ? resetFilters()
-                            : setTab("processing")
+                            : navigate("processing")
                         }
                       >
                         {result?.promos.length
