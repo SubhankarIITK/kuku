@@ -1,74 +1,1335 @@
-import React,{useEffect,useState,useRef} from 'react';
-import {createRoot} from 'react-dom/client';
-import {ArrowUpRight,ArrowRight,Check,ChevronDown,ChevronRight,Download,FileText,Film,FolderOpen,LayoutGrid,LoaderCircle,Search,Settings2,ShieldCheck,Sparkles,Upload,X,ChartNoAxesCombined,SlidersHorizontal,TriangleAlert,Scissors,Clock3} from 'lucide-react';
-import type {Dataset,Episode,Job,Promo,Review,Scores,Weights} from '../../backend/src/types';
-import {defaultWeights,criteria} from '../../backend/src/types';
-import './style.css';
-const time=(ms:number)=>`${Math.floor(ms/60000).toString().padStart(2,'0')}:${Math.floor(ms/1000%60).toString().padStart(2,'0')}.${(ms%1000).toString().padStart(3,'0')}`;
-const titles:Record<keyof Scores,string>={hook:'Opening hook',cliffhanger:'Cliffhanger',standaloneClarity:'Standalone clarity',emotionalImpact:'Emotional impact',pacing:'Pacing'};
-async function api<T>(url:string,options?:RequestInit):Promise<T>{const r=await fetch(url,options);const data=await r.json();if(!r.ok)throw Object.assign(new Error(data.error?.message??'Request failed'),{status:r.status,job:data.job});return data as T;}
-const post=(body:unknown):RequestInit=>({method:'POST',headers:{'Content-Type':'application/json','X-Kuku-Client':'local'},body:JSON.stringify(body)});
-type DatasetSummary=Omit<Dataset,'episodes'>&{episodeCount:number;episodeNumbers:number[]};
-type Result={runId:string;promos:Promo[];reviews:Review[];manifest:Record<string,unknown>|null;metrics:Record<string,unknown>|null};
-type Health={hosted?:boolean;preferredModel?:string;fallbackActive?:boolean;groqBudgets?:{model:string;used:number;limit:number;remaining:number;blocked:boolean;resetsAt:string}[];groqBudget?:{model:string;used:number;limit:number;remaining:number;blocked:boolean;resetsAt:string};providers:{gemini:boolean;groq:boolean};defaultModel:string;defaultProvider:'groq'|'gemini'};
-function App(){
-  const [datasets,setDatasets]=useState<DatasetSummary[]>([]),[dsId,setDsId]=useState(()=>localStorage.getItem('kuku.dataset')??''),[tab,setTab]=useState('library'),[health,setHealth]=useState<Health|null>(null),[result,setResult]=useState<Result|null>(null),[error,setError]=useState(''),[toast,setToast]=useState(''),[loading,setLoading]=useState(true),[job,setJob]=useState<Job|null>(null),[selected,setSelected]=useState<Promo|null>(null),[episode,setEpisode]=useState<Episode|null>(null);
-  const [search,setSearch]=useState(''),[epFilter,setEpFilter]=useState('all'),[reviewFilter,setReviewFilter]=useState('all'),[minScore,setMinScore]=useState(0),[maxDuration,setMaxDuration]=useState(60),[sort,setSort]=useState('rank'),[count,setCount]=useState(12),[filters,setFilters]=useState(false),[exportOpen,setExportOpen]=useState(false),[downloadingRaw,setDownloadingRaw]=useState(false);
-  const [mode,setMode]=useState<'offline'|'ai'>('ai'),[provider,setProvider]=useState<'gemini'|'groq'>('gemini'),[model,setModel]=useState('gemini-2.5-flash'),[limit,setLimit]=useState(1),[weights,setWeights]=useState<Weights>(defaultWeights),[uploading,setUploading]=useState(false),[starting,setStarting]=useState(false);
-  const [evaluation,setEvaluation]=useState<{metrics:Record<string,unknown>;manifest:Record<string,unknown>;baseline:Promo[];failures:Record<string,unknown>[];reviews:Review[]}|null>(null);
-  const dsRef=useRef(dsId),resultsRequest=useRef(0);
-  const selectedBudget=health?.groqBudgets?.find(b=>b.model===model)??(health?.groqBudget?.model===model?health.groqBudget:undefined);
-  const budgetBlocked=provider==='groq'&&selectedBudget?.blocked;
-  const ds=datasets.find(d=>d.id===dsId),query=`datasetId=${dsId}`;
-  const notify=(s:string)=>{setToast(s);setTimeout(()=>setToast(''),4000);};
-  function chooseDataset(id:string){dsRef.current=id;setDsId(id);localStorage.setItem('kuku.dataset',id);}
-  async function refreshDatasets(){const list=await api<DatasetSummary[]>('/api/datasets');setDatasets(list);setDsId(id=>list.some(d=>d.id===id)?id:list[0]?.id??'');}
-  useEffect(()=>{void Promise.all([refreshDatasets(),api<Health>('/api/health').then(h=>{setHealth(h);setModel(h.defaultModel);setProvider(h.defaultProvider);})]).catch(e=>setError(e.message)).finally(()=>setLoading(false));},[]);
-  useEffect(()=>{const update=()=>{void api<Health>('/api/health').then(setHealth).catch(()=>{});};const timer=setInterval(update,30000);window.addEventListener('focus',update);return()=>{clearInterval(timer);window.removeEventListener('focus',update);};},[]);
-  async function refreshResults(target=dsRef.current){if(!target)return;const request=++resultsRequest.current;const r=await api<Result>(`/api/promos?datasetId=${target}`);const ev=r.manifest?await api<NonNullable<typeof evaluation>>(`/api/evaluation?datasetId=${target}`):null;if(dsRef.current!==target||request!==resultsRequest.current)return;setResult(r);setEvaluation(ev);}
-  useEffect(()=>{dsRef.current=dsId;resultsRequest.current++;setResult(null);setEvaluation(null);setSelected(null);setError('');setEpFilter('all');setReviewFilter('all');setSearch('');setMinScore(0);setMaxDuration(60);setCount(12);setExportOpen(false);setJob(j=>j?.datasetId===dsId?j:null);if(!dsId)return;localStorage.setItem('kuku.dataset',dsId);void refreshResults(dsId).catch(e=>{if(dsRef.current===dsId)setError(e.message);});void api<Job|null>(`/api/analysis/active?datasetId=${dsId}`).then(j=>{if(dsRef.current===dsId)setJob(current=>j??(current?.datasetId===dsId?current:null));}).catch(e=>{if(dsRef.current===dsId)setError(e.message);});},[dsId]);
-  useEffect(()=>{if(!job||job.datasetId!==dsId||!['queued','running'].includes(job.status))return;const target=dsId;let stopped=false,stepping=false,failures=0,nextAttemptAt=0;const interval=setInterval(()=>{if(stepping||Date.now()<nextAttemptAt||(job.retryAt&&Date.parse(job.retryAt)>Date.now()))return;stepping=true;void (health?.hosted?api<Job>(`/api/analysis/${job.id}/step`,post({})):api<Job>(`/api/analysis/${job.id}`)).then(j=>{if(stopped||dsRef.current!==target)return;setJob(j);failures=0;nextAttemptAt=0;setError(e=>e.startsWith('Connection interrupted.')?'':e);if(j.status==='running'&&j.progress>0)void refreshResults(target).catch(e=>setError(e.message));if(j.status==='complete'){void refreshResults(target).catch(e=>setError(e.message));notify('Analysis finished. Your shortlist is ready.');}if(j.status==='failed'||j.status==='interrupted')setError(j.error??'Analysis stopped. You can run it again.');}).catch(()=>{if(!stopped&&dsRef.current===target){failures++;nextAttemptAt=Date.now()+Math.min(30000,1500*2**failures);if(failures>=3)setError('Connection interrupted. Retrying automatically; saved progress will be restored.');}}).finally(()=>{stepping=false;});},1200);return()=>{stopped=true;clearInterval(interval);};},[job?.id,job?.status,dsId,health?.hosted,job?.retryAt]);
-  useEffect(()=>{if(!selected){setEpisode(null);return;}setEpisode(null);const controller=new AbortController();void api<Episode>(`/api/episodes/${selected.segments[0].episode}?${query}`,{signal:controller.signal}).then(setEpisode).catch(e=>{if(e.name!=='AbortError')setError(e.message);});return()=>controller.abort();},[selected?.id,dsId]);
-  async function upload(file:File){if(uploading)return;if(!file.name.toLowerCase().endsWith('.zip')){setError('Choose a .zip archive with timestamped .txt screenplays.');return;}if(file.size>15_000_000){setError('This ZIP exceeds the 15 MB upload limit. Please upload a smaller pack.');return;}setUploading(true);setError('');try{const form=new FormData();form.append('file',file);type UploadResult={id:string;job:Job|null;resultReady:boolean;reused:boolean};let r:UploadResult;if(health?.hosted){const pending=await api<{uploadId:string;chunkSize:number}>('/api/datasets/upload-url',post({name:file.name,size:file.size}));for(let start=0,index=0;start<file.size;start+=pending.chunkSize,index++){await api(`/api/datasets/uploads/${pending.uploadId}/${index}`,{method:'PUT',headers:{'Content-Type':'application/octet-stream','X-Kuku-Client':'local'},body:file.slice(start,start+pending.chunkSize)});}r=await api<UploadResult>('/api/datasets/upload-complete',post({uploadId:pending.uploadId}));}else r=await api<UploadResult>('/api/datasets/upload',{method:'POST',headers:{'X-Kuku-Client':'local'},body:form});await refreshDatasets();chooseDataset(r.id);setJob(r.job);setMode('ai');setLimit(1);setTab('library');notify(r.reused?'This pack is already analyzed. Showing saved results.':'ZIP imported. Creating your local shortlist without API calls.');await refreshResults(r.id);}catch(e){setError((e as Error).message);}finally{setUploading(false);}}
-  async function start(){if(starting)return;setStarting(true);setError('');try{setHealth(await api<Health>('/api/health'));const j=await api<Job>('/api/analysis/start',post({datasetId:dsId,mode,provider,model,limit,weights}));setJob(j);setTab('library');notify(mode==='offline'?'Creating your shortlist locally. No API calls.':'AI analysis started. Cached results will be reused.');}catch(e){const err=e as Error&{job?:Job};if(err.job?.datasetId===dsId){setJob(err.job);setTab('library');notify('This screenplay is already being analyzed. Showing progress.');}else setError(err.message);}finally{setStarting(false);}}
-  async function resume(){if(!job||starting)return;setStarting(true);setError('');try{setJob(await api<Job>(`/api/analysis/${job.id}/resume`,post({})));notify('Resuming saved progress.');}catch(e){setError((e as Error).message);}finally{setStarting(false);}}
-  const reviewed=new Set(result?.reviews.map(r=>r.promoId));
-  const filtered=(result?.promos??[]).filter(p=>(epFilter==='all'||p.segments[0].episode===+epFilter)&&(reviewFilter==='all'||(reviewFilter==='reviewed'?reviewed.has(p.id):!reviewed.has(p.id)))&&p.score>=minScore&&p.durationMs<=maxDuration*1000&&JSON.stringify([p.evaluation.reason,p.evaluation.evidence,p.segments[0].episode]).toLowerCase().includes(search.toLowerCase())).sort((a,b)=>sort==='duration'?a.durationMs-b.durationMs:sort==='episode'?a.segments[0].episode-b.segments[0].episode:sort==='score'?b.score-a.score:a.rank-b.rank);
-  const m=result?.metrics;
-  async function downloadRaw(){if(!result?.runId||downloadingRaw)return;setDownloadingRaw(true);setExportOpen(false);setError('');try{const response=await fetch(`/api/export/raw-output.zip?datasetId=${dsId}&runId=${result.runId}`);if(!response.ok){const body=await response.json();throw new Error(body.error?.message??'Raw output download failed');}if(response.headers.get('content-type')?.includes('application/json')){const {downloadUrl}=await response.json();window.location.assign(downloadUrl);notify('Private raw output download is ready.');return;}const blob=await response.blob(),url=URL.createObjectURL(blob),link=document.createElement('a');link.href=url;link.download=`kuku-raw-output-${result.runId}.zip`;document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),60000);notify('Raw output ZIP downloaded. It contains private evidence.');}catch(e){setError((e as Error).message);}finally{setDownloadingRaw(false);}}
-  function exportFile(file:string){window.location.assign(`/api/export/${file}?${query}`);setExportOpen(false);}
-  return <div className="shell">
-    <aside className="sidebar"><a className="brand" href="#" onClick={e=>{e.preventDefault();setTab('library');}}><span className="brandmark">k</span><span>kuku<span className="branddot">.</span><small>PROMO INTELLIGENCE</small></span></a><div className="workspace-label">YOUR WORKSPACE</div><nav>{[['library',LayoutGrid,'Promo library'],['evaluation',ChartNoAxesCombined,'Quality & evaluation'],['processing',FolderOpen,'Datasets & processing']].map(([id,Icon,label])=>{const I=Icon as typeof LayoutGrid;return <button key={String(id)} className={tab===id?'nav active':'nav'} onClick={()=>setTab(String(id))}><I size={18}/><span>{String(label)}</span>{id==='library'&&<span className="nav-count">{result?.promos.length??0}</span>}</button>;})}</nav><div className="sidebar-note"><span className="tiny-label">WORKFLOW</span><p>Upload scripts.<br/>Compare cuts.<br/>Review the shortlist.</p><button onClick={()=>setTab('processing')}>Import ZIP <Upload size={15}/></button></div><div className="private"><span className="status-dot"/><span>{health?.hosted?'Hosted on Vercel':'Local workspace'}<small>{health?.hosted?'Shared workspace / no sign-in':'Saved on this computer'}</small></span></div></aside>
-    <div className="workspace"><header className="topbar"><div><span className="crumb">Workspace</span><ChevronRight size={13}/><span>{tab==='library'?'Promo library':tab==='evaluation'?'Quality & evaluation':'Datasets & processing'}</span></div><div className="topright"><span className="status-dot"/>{health?.hosted?'Shared workspace':'Local workspace'}<span className="workspace-tag">EDITOR</span></div></header>
-      <main>{error&&<div className="error" role="alert"><TriangleAlert size={17}/>{error}<button aria-label="Dismiss error" onClick={()=>setError('')}><X size={15}/></button></div>}
-      <div className="page-heading"><div><div className="eyebrow">KUKU / EDITOR</div><h1>{tab==='library'?'Promo library':tab==='evaluation'?'Analysis report':'Import & analyze'}</h1><p>{tab==='library'?'Compare source cuts and build your shortlist.':tab==='evaluation'?'Coverage, scoring and results that need attention.':'Upload a ZIP of timestamped scripts to get started.'}</p></div><div className="heading-actions"><div className="export-wrap"><button className="button" disabled={!result?.runId||downloadingRaw} onClick={()=>setExportOpen(!exportOpen)}>{downloadingRaw?<LoaderCircle size={16} className="spin"/>:<Download size={16}/>} {downloadingRaw?'Preparing ZIP...':'Export'} <ChevronDown size={13}/></button>{exportOpen&&<div className="dropdown"><button onClick={()=>void downloadRaw()}><Download size={13} style={{display:'inline',marginRight:6}}/>Download raw output (.zip)</button>{['promos.csv','promos.json','evaluation.json','run_manifest.json','reviews.json'].map(f=><button key={f} onClick={()=>exportFile(f)}>{f}</button>)}</div>}</div><button className="button primary" onClick={()=>setTab('processing')}><Upload size={16}/> Import / analyze</button></div></div>
-      {loading?<div className="empty"><LoaderCircle className="spin"/>Loading your workspace…</div>:<>
-      <section className="showbar"><div className="show-icon"><Film size={22}/></div><div className="show-text"><div className="tiny-label">CURRENT SCREENPLAY</div><select aria-label="Current screenplay" value={dsId} onChange={e=>chooseDataset(e.target.value)}>{!datasets.length&&<option value="">No screenplay loaded</option>}{datasets.map(d=><option key={d.id} value={d.id}>{d.name.replace(/-scripts.*$/,'')}</option>)}</select></div><span className="badge neutral">{ds?.episodeCount??0} episodes</span><span className="show-divider"/><span className="badge success"><ShieldCheck size={13}/>{ds?'Parsed & traceable':'Ready to import'}</span></section>
-      <section className="engine-status" aria-label="Analysis service status"><div className="engine-identity"><span className={'engine-dot '+(health?.providers.groq&&!health.groqBudget?.blocked?'ready':'')}/><div><strong>{health?.providers.groq?'Groq connected':'Local analysis ready'}</strong><span>{job?.retryAt?'AI cooldown / progress saved':health?.groqBudget?.blocked?'Daily app budget reached':'Cached results first / one AI worker'}</span></div></div><div className="engine-budget"><div><span>App token budget</span><strong>{Math.round((health?.groqBudget?.remaining??0)/1000)}k <small>remaining</small></strong></div><meter min={0} max={health?.groqBudget?.limit??190000} value={health?.groqBudget?.remaining??0} aria-label="Remaining app token budget"/><span className="budget-caption">Local estimate, not your Groq account balance</span></div></section>
-      {job&&job.datasetId===dsId&&['running','queued'].includes(job.status)&&<div className="job"><LoaderCircle size={17} className="spin"/><span>{job.stage}{job.retryAt&&<small className="retry-time">Next attempt after {new Date(job.retryAt).toLocaleTimeString()}</small>}</span><progress value={job.progress} max={1}/><span>{Math.round(job.progress*100)}%</span></div>}
-      {job&&job.datasetId===dsId&&['failed','interrupted'].includes(job.status)&&<div className="recovery-banner"><TriangleAlert size={18}/><div><strong>Analysis paused. Your saved results are available.</strong><p>{job.error??'Resume from the last saved episode.'}</p></div>{health?.hosted?<button className="button" disabled={starting} onClick={()=>void resume()}>Resume analysis <ArrowRight size={15}/></button>:<button className="button" onClick={()=>setTab('processing')}>Continue in processing</button>}</div>}
-      {health?.groqBudget?.blocked&&<div className="notice"><TriangleAlert size={18}/><div><strong>{health.fallbackActive?'Groq AI is available using GPT-OSS 20B':'The preferred model has reached its local budget'}</strong><p>{health.fallbackActive?'GPT-OSS 120B is paused. The verified 20B fallback is selected for new AI runs; existing results keep their original model labels.':'Saved results remain usable. AI availability is checked automatically every 30 seconds.'} Preferred-model local budget refresh: {new Date(health.groqBudget.resetsAt).toLocaleString('en-IN',{timeZone:'Asia/Kolkata',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})} IST. Groq account limits still apply.</p></div></div>}
-      {result?.manifest?.status==='partial'&&<div className="notice"><TriangleAlert size={18}/><div><strong>AI analysis finished with limitations.</strong><p>Showing saved results. Open Quality &amp; evaluation for coverage and failures. Local analysis is available without API calls.</p></div></div>}
-      {tab==='library'&&<>
-      <section className="stats">{[[FileText,'Episodes analyzed',(result?.manifest?.mode==='ai'?m?.aiEpisodeSuccesses??m?.episodesAttempted:m?.episodesAttempted)??0,`${ds?.report.events.toLocaleString()??0} timestamped events`],[Scissors,'Intervals discovered',Number(m?.enumeratedCandidates??0).toLocaleString(),'20–60 seconds · real event boundaries'],[Sparkles,'Ranked suggestions',result?.promos.length??0,result?.manifest?.mode==='ai'?'AI-scored · evidence validated':'Heuristic shortlist · needs editorial review'],[ShieldCheck,'Human reviewed',result?.reviews.length??0,`${(result?.promos.length??0)-(result?.reviews.length??0)} awaiting your judgment`]].map(([Icon,label,value,note])=>{const I=Icon as typeof Film;return <div className="stat" key={String(label)}><div className="stat-label">{String(label)}<I size={17}/></div><strong>{String(value)}</strong><small>{String(note)}</small></div>;})}</section>
-      <div className="section-heading"><div><h2>Promo shortlist <span className="pill">{filtered.length}</span></h2><p>Sorted candidates with opening and ending evidence.</p></div><span className="badge warm">{result?.manifest?.mode==='ai'?'AI judgments · not calibrated':'Heuristic mode · AI evaluation pending'}</span></div>
-      <div className="toolbar"><div className="search"><Search size={16}/><input aria-label="Search promos" placeholder="Search dialogue, moments, or characters…" value={search} onChange={e=>{setSearch(e.target.value);setCount(12);}}/></div><select aria-label="Filter episode" value={epFilter} onChange={e=>{setEpFilter(e.target.value);setCount(12);}}><option value="all">All episodes</option>{(ds?.episodeNumbers??[]).map(n=><option key={n} value={n}>Episode {n}</option>)}</select><select aria-label="Review status" value={reviewFilter} onChange={e=>setReviewFilter(e.target.value)}><option value="all">All review statuses</option><option value="unreviewed">Unreviewed</option><option value="reviewed">Reviewed</option></select><button className={'button filter-button '+(filters?'pressed':'')} onClick={()=>setFilters(!filters)}><SlidersHorizontal size={15}/>Filters</button></div>
-      {filters&&<div className="filter-row"><label>Minimum score <input type="range" min="0" max="10" step="0.5" value={minScore} onChange={e=>setMinScore(+e.target.value)}/>{minScore.toFixed(1)}</label><label>Maximum duration <input type="range" min="20" max="60" value={maxDuration} onChange={e=>setMaxDuration(+e.target.value)}/>{maxDuration}s</label><button className="text-button" onClick={()=>{setMinScore(0);setMaxDuration(60);setReviewFilter('all');setEpFilter('all');setSearch('');}}>Reset filters</button></div>}
-      <div className="list-meta"><span>Showing {Math.min(count,filtered.length)} of {filtered.length} suggestions</span><label>Sort by <select aria-label="Sort promos" value={sort} onChange={e=>setSort(e.target.value)}><option value="rank">Global rank</option><option value="score">Score</option><option value="episode">Episode</option><option value="duration">Duration</option></select></label></div>
-      <section className="promo-grid">{filtered.slice(0,count).map(p=><PromoCard key={p.id} promo={p} reviewed={reviewed.has(p.id)} onOpen={()=>setSelected(p)}/>)}</section>
-      {!filtered.length&&<div className="empty"><Scissors size={28}/><h3>{job&&['queued','running'].includes(job.status)?'Preparing your shortlist...':result?.manifest?'No matching suggestions':'Ready for your first analysis'}</h3><p>{job&&['queued','running'].includes(job.status)?'Your results will appear here automatically.':result?.manifest?'Try changing your filters. Clips need a complete 20-60 second interval.':'Upload a screenplay ZIP to create your local shortlist automatically.'}</p><button className="button" onClick={()=>setTab('processing')}>Open processing</button></div>}{filtered.length>count&&<div className="load-more"><button className="button" onClick={()=>setCount(count+12)}>Show 12 more suggestions <ChevronDown size={15}/></button></div>}
-      <div className="footnote"><FileText size={13}/>{health?.hosted?'Shared workspace. Source text is stored in MongoDB, separate from the frontend build.':'Private source evidence is served locally and never included in the frontend bundle.'}</div></>}
-      {tab==='processing'&&<div className="processing-grid"><section className="panel"><div className="panel-title"><Upload size={19}/><h2>Import screenplays</h2></div><label className="dropzone" onDragOver={e=>e.preventDefault()} onDrop={e=>{e.preventDefault();if(e.dataTransfer.files[0])void upload(e.dataTransfer.files[0]);}}><div className="upload-circle">{uploading?<LoaderCircle className="spin"/>:<FolderOpen size={29}/>}</div><h3>{uploading?'Parsing your pack…':'Bring your next story.'}</h3><p>Upload a ZIP of timestamped .txt screenplays. A local shortlist is created automatically.</p><span className="button">Choose screenplay ZIP <ArrowUpRight size={15}/></span><small>15 MB compressed · 30 MB expanded · stays local</small><input aria-label="Upload screenplay ZIP" type="file" accept=".zip,application/zip,application/x-zip-compressed" disabled={uploading} onChange={e=>{if(e.target.files?.[0])void upload(e.target.files[0]);e.target.value='';}}/></label>{ds&&<div className="parse-summary"><h3>Parsing report</h3><dl><dt>Files discovered / parsed</dt><dd>{ds.report.discovered} / {ds.report.parsed}</dd><dt>Scenes / timed events</dt><dd>{ds.report.scenes} / {ds.report.events.toLocaleString()}</dd><dt>Legitimate overlapping pairs</dt><dd>{ds.report.overlapPairs.toLocaleString()}</dd><dt>Invalid timed records</dt><dd>{ds.report.invalidRecords}</dd><dt>Warnings / files to inspect</dt><dd>{ds.report.warnings.length} / {ds.report.manualReviewFiles.length}</dd></dl>{ds.report.warnings.map((w,i)=><p className="warning-text" key={i}>{w.code}: {w.message}</p>)}</div>}</section>
-      <section className="panel"><div className="panel-title"><Settings2 size={19}/><h2>Configure analysis</h2></div><label className="field">Selection engine<select value={mode} onChange={e=>{setMode(e.target.value as typeof mode);setLimit(e.target.value==='ai'?1:6);}}><option value="offline">Deterministic shortlist (no API)</option><option value="ai">AI evaluation + independent baseline</option></select></label><p className="help">{mode==='offline'?'Runs on all episodes. Lexical scores discover promising cuts; narrative quality remains unverified.':'Evaluates real candidates, compares nearby cuts, and independently asks the same model to select baseline clips.'}</p>{mode==='ai'&&<><label className="field">Provider<select value={provider} onChange={e=>{const p=e.target.value as typeof provider;setProvider(p);setModel(p==='groq'?'openai/gpt-oss-120b':'gemini-2.5-flash');}}><option value="gemini">Google Gemini</option><option value="groq">Groq</option></select></label><label className="field">Model ID<input value={model} onChange={e=>setModel(e.target.value)}/></label>{provider==='groq'&&health?.fallbackActive&&model==='openai/gpt-oss-20b'&&<p className="help">Free-tier fallback: GPT-OSS 20B. Connection verified. Scores are recorded with this model ID; this is not a paid-provider switch.</p>}<div className={'credential '+(health?.providers[provider]?'configured':'')}><Settings2 size={15}/>{health?.providers[provider]?'Server credential configured':health?.hosted?'Key missing. Add it in Vercel environment settings and redeploy.':'Key missing. Add it to .env and restart the backend.'}</div></>}
-      {mode==='ai'&&budgetBlocked&&<p className="credential">The local daily token budget cannot fit another request. Choose deterministic analysis for immediate results without API calls.</p>}<label className="field">Candidates per episode<input type="number" min="1" max="20" value={limit} onChange={e=>setLimit(+e.target.value)}/></label><details className="weight-settings"><summary>Ranking weights <ChevronDown size={14}/></summary><p className="help">Weights are normalized. A diversity deduction of up to 0.30 affects display order; the raw score stays visible.</p>{criteria.map(k=><label className="weight" key={k}>{titles[k]}<input type="number" min="0" max="1" step=".05" value={weights[k]} onChange={e=>setWeights({...weights,[k]:+e.target.value})}/></label>)}</details><button className="button primary wide" disabled={!dsId||starting||uploading||!!job&&job.datasetId===dsId&&['running','queued'].includes(job.status)||mode==='ai'&&(!health?.providers[provider]||budgetBlocked)} onClick={()=>void start()}><Sparkles size={17}/>Run {mode==='ai'?'AI':'deterministic'} analysis<ArrowRight size={16}/></button><p className="help">Every run preserves source hashes, settings, candidates, evaluations, and exports. Continuous promos only.</p></section></div>}
-      {tab==='evaluation'&&<EvaluationView data={evaluation} result={result} onOpen={setSelected}/>}
-      </>}
-      </main><footer>Kuku Promo Intelligence <span>Script analysis workspace</span><span className="footer-right">KUKU / PROMO TOOLS</span></footer>
-    </div>{toast&&<div className="toast" role="status"><Check size={17}/>{toast}</div>}
-    {selected&&<Detail promo={selected} episode={episode} review={result?.reviews.find(r=>r.promoId===selected.id)} onClose={()=>setSelected(null)} onSave={async(body)=>{const review=await api<Review>(`/api/promos/${selected.id}/review`,post({...body,datasetId:dsId,runId:result?.runId}));setResult(r=>r?{...r,reviews:[...r.reviews.filter(x=>x.promoId!==review.promoId),review]}:r);notify('Editorial review saved.');}}/>}
-  </div>;
+import React, { useEffect, useState, useRef } from "react";
+import { createRoot } from "react-dom/client";
+import {
+  ArrowUpRight,
+  ArrowRight,
+  Check,
+  ChevronDown,
+  ChevronRight,
+  Download,
+  FileText,
+  Film,
+  FolderOpen,
+  LayoutGrid,
+  LoaderCircle,
+  Search,
+  Settings2,
+  ShieldCheck,
+  Sparkles,
+  Upload,
+  X,
+  ChartNoAxesCombined,
+  SlidersHorizontal,
+  TriangleAlert,
+  Scissors,
+} from "lucide-react";
+import type {
+  Dataset,
+  Episode,
+  Job,
+  Promo,
+  Review,
+  Weights,
+} from "../../backend/src/types";
+import { defaultWeights, criteria } from "../../backend/src/types";
+import "./style.css";
+import PromoRow from "./components/PromoRow";
+import EvaluationView from "./components/EvaluationView";
+import Detail from "./components/Detail";
+import { titles } from "./presentation";
+import type { Result } from "./view-types";
+async function api<T>(url: string, options?: RequestInit): Promise<T> {
+  const r = await fetch(url, options);
+  const data = await r.json();
+  if (!r.ok)
+    throw Object.assign(new Error(data.error?.message ?? "Request failed"), {
+      status: r.status,
+      job: data.job,
+    });
+  return data as T;
 }
-function PromoCard({promo:p,reviewed,onOpen}:{promo:Promo;reviewed:boolean;onOpen:()=>void}){const s=p.segments[0];return <article className="promo-card"><div className="card-top"><span className="rank">#{String(p.rank).padStart(2,'0')}</span><span className="episode-label">Episode {String(s.episode).padStart(2,'0')}</span><span className="score">{p.score.toFixed(1)}<small>/10</small></span></div><div className="cut"><Clock3 size={14}/><span>{time(s.startMs)} <span className="muted">→</span> {time(s.endMs)}</span><span className="duration">{(p.durationMs/1000).toFixed(1)}s</span></div><div className="card-evidence"><span className="evidence-label"><span className="small-dot coral"/>Opening hook</span><p>{p.evaluation.evidence.hook.description}</p><span className="evidence-label"><span className="small-dot green"/>Ending cliffhanger</span><p>{p.evaluation.evidence.cliffhanger.description}</p></div><div className="card-bottom"><span className={'review-state '+(reviewed?'done':'')}>{reviewed?<Check size={13}/>:<span className="small-dot"/>}{reviewed?'Reviewed':'Needs editorial review'}</span><button aria-label={`Inspect episode ${s.episode}, cut ${p.rank}`} onClick={onOpen}>Inspect cut <ArrowUpRight size={16}/></button></div></article>;}
-function EvaluationView({data,result,onOpen}:{data:{metrics:Record<string,unknown>;baseline:Promo[];failures:Record<string,unknown>[]}|null;result:Result|null;onOpen:(p:Promo)=>void}){if(!data)return <div className="empty"><ChartNoAxesCombined size={30}/><h3>No run to evaluate yet</h3><p>Run an analysis to inspect measured results.</p></div>;const m=data.metrics;return <><div className="notice"><ShieldCheck size={21}/><div><strong>Validity is measurable. Editorial quality needs review.</strong><p>{String(m.aiComparison)} No improvement over the baseline is claimed.</p></div></div><div className="evaluation-grid"><section className="panel"><h2>Measured comparison</h2><table><thead><tr><th>Metric</th><th>Structured pipeline</th><th>Direct LLM</th></tr></thead><tbody><tr><td>Suggestions before ranking</td><td>{String(m.advancedSuggestions)} (all episodes)</td><td>{m.baselineSuggestions?String(m.baselineSuggestions)+' (sample)':'Not run'}</td></tr><tr><td>Invalid suggestions</td><td>{String(m.advancedInvalid)}</td><td>{m.baselineSuggestions?String(m.baselineInvalid):'—'}</td></tr><tr><td>Timestamp / evidence validity</td><td>{m.advancedValidityRate===null?'—':`${(Number(m.advancedValidityRate)*100).toFixed(1)}%`}</td><td>{m.baselineValidityRate===null?'—':`${(Number(m.baselineValidityRate)*100).toFixed(1)}%`}</td></tr><tr><td>Comparison sample episodes</td><td colSpan={2}>{Array.isArray(m.baselineSampleEpisodes)?m.baselineSampleEpisodes.join(', '):'Not recorded'}</td></tr><tr><td>Human reviewed</td><td>{result?.reviews.length??0}</td><td>Not collected</td></tr><tr><td>Quality improvement</td><td colSpan={2}>Unmeasured — human comparison pending</td></tr></tbody></table><p className="help">Advanced results include validation and bounded repair. Baseline invalidity is measured before rejection. Comparison uses only the listed sample episodes, not all advanced suggestions; these measure delivered validity, not equal-call efficiency.</p></section><section className="panel"><h2>Run telemetry</h2><dl><dt>Episodes attempted</dt><dd>{String(m.episodesAttempted)}</dd><dt>Elapsed time</dt><dd>{(Number(m.elapsedMs)/1000).toFixed(2)}s</dd><dt>Candidate evaluations</dt><dd>{String(m.evaluatedCandidates)}</dd><dt>Model calls / retries</dt><dd>{m.usage?`${(m.usage as {calls:number}).calls} / ${(m.usage as {retries:number}).retries}`:'Not run'}</dd><dt>Input / output tokens</dt><dd>{m.usage?`${(m.usage as {inputTokens:number}).inputTokens} / ${(m.usage as {outputTokens:number}).outputTokens}`:'Not available'}</dd><dt>Estimated cost</dt><dd>Not estimated</dd></dl><p className="help">Model self-confidence is uncalibrated. Human labels are stored separately from generated scores.</p></section></div><section className="panel failure-panel"><h2>Selection risks & failures <span className="pill">{data.failures.length}</span></h2><p className="help">Actual run flags below. Heuristic flags indicate a possible weakness, not a confirmed human judgment.</p>{!data.failures.length&&<p>No automatic flags recorded. This does not prove editorial quality.</p>}{data.failures.slice(0,15).map((f,i)=><div className="failure" key={i}><TriangleAlert size={17}/><div><strong>{String(f.stage)} · {String(f.candidateId??`Episode ${f.episode}`)}</strong><p>{String(f.error??f.whySelected??'Review required')}</p>{Array.isArray(f.whyWeak)&&<p>{f.whyWeak.join(' ')}</p>}{f.improvement!==undefined&&<small>{String(f.improvement)}</small>}</div>{result?.promos.some(p=>p.id===f.candidateId)&&<button className="button" onClick={()=>onOpen(result.promos.find(p=>p.id===f.candidateId)!)}>Inspect</button>}</div>)}{data.failures.length>15&&<p className="help">Showing the first 15 flags. The complete failure log is stored in the run output folder.</p>}</section></>;}
-function Detail({promo:p,episode:ep,review,onClose,onSave}:{promo:Promo;episode:Episode|null;review?:Review;onClose:()=>void;onSave:(body:{ratings:Review['ratings'];label:string;notes:string})=>Promise<void>}){const [view,setView]=useState<'evidence'|'review'>('evidence'),[context,setContext]=useState(false),[ratings,setRatings]=useState<Review['ratings']>(review?.ratings??{hook:3,cliffhanger:3,clarity:3,boundaries:3,usefulness:3}),[label,setLabel]=useState(review?.label??'Needs boundary adjustment'),[notes,setNotes]=useState(review?.notes??''),[saving,setSaving]=useState(false),[err,setErr]=useState('');const s=p.segments[0],dialogRef=useRef<HTMLElement>(null);useEffect(()=>{const previous=document.activeElement as HTMLElement|null;const focusable=()=>Array.from(dialogRef.current?.querySelectorAll<HTMLElement>('button:not([disabled]),input,select,textarea,summary')??[]);focusable()[0]?.focus();const fn=(e:KeyboardEvent)=>{if(e.key==='Escape')onClose();if(e.key==='Tab'){const items=focusable(),first=items[0],last=items.at(-1);if(e.shiftKey&&document.activeElement===first){e.preventDefault();last?.focus();}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first?.focus();}}};window.addEventListener('keydown',fn);const old=document.body.style.overflow;document.body.style.overflow='hidden';return()=>{window.removeEventListener('keydown',fn);document.body.style.overflow=old;previous?.focus();};},[]);return <div className="overlay" onClick={onClose}><section ref={dialogRef} className="detail" role="dialog" aria-modal="true" aria-label="Promo detail" onClick={e=>e.stopPropagation()}><div className="detail-header"><div><div className="eyebrow">PROMO #{p.rank} · EPISODE {s.episode}</div><h2>Every cut has a reason.</h2></div><button className="icon-button" aria-label="Close promo detail" onClick={onClose}><X size={20}/></button></div><div className="detail-cut"><Scissors size={18}/><strong>{time(s.startMs)} → {time(s.endMs)}</strong><span>{(p.durationMs/1000).toFixed(1)} seconds</span><span className="score">{p.score.toFixed(1)}<small>/10</small></span></div>{ep&&<div className="timeline-wrap"><div className="timeline">{ep.events.filter(e=>e.type==='dialogue').map(e=><i key={e.id} style={{left:`${e.startMs/ep.durationMs*100}%`,width:`${(e.endMs-e.startMs)/ep.durationMs*100}%`}}/>)}<div className="selected-range" style={{left:`${s.startMs/ep.durationMs*100}%`,width:`${(s.endMs-s.startMs)/ep.durationMs*100}%`}}/></div><div className="timeline-labels"><span>00:00</span><span>Selected interval</span><span>{time(ep.durationMs)}</span></div></div>}<div className="detail-tabs"><button className={view==='evidence'?'active':''} onClick={()=>setView('evidence')}>Evidence & boundaries</button><button className={view==='review'?'active':''} onClick={()=>setView('review')}>Editorial review {review&&<Check size={14}/>}</button></div><div className="detail-body">{view==='evidence'?<><div className="source-banner">{p.evaluation.source==='heuristic'?'Heuristic scores · narrative quality unverified':'AI subjective scores · evidence validated'} · {p.evaluation.model}</div><div className="score-bars">{criteria.map(k=><div key={k}><span>{titles[k]}</span><div><i style={{width:`${p.evaluation.scores[k]*10}%`}}/></div><b>{p.evaluation.scores[k].toFixed(1)}</b></div>)}</div><p>{p.evaluation.reason}</p><div className="detail-evidence"><h3>Opening hook</h3><p>{p.evaluation.evidence.hook.description}</p><small>{p.evaluation.evidence.hook.evidenceEventIds.join(' · ')}</small><h3>Ending cliffhanger</h3><p>{p.evaluation.evidence.cliffhanger.description}</p><small>{p.evaluation.evidence.cliffhanger.evidenceEventIds.join(' · ')}</small></div><details className="weight-settings"><summary>Evidence for all criteria <ChevronDown size={14}/></summary>{criteria.map(k=><div key={k}><h4>{titles[k]}</h4><p>{p.evaluation.evidence[k].description}</p><small>{p.evaluation.evidence[k].evidenceEventIds.join(' · ')}</small></div>)}</details>{p.boundaryComparison&&<div className="boundary"><h3>Boundary comparison</h3><div><span>Original</span><code>{time(p.boundaryComparison.original.segments[0].startMs)} → {time(p.boundaryComparison.original.segments[0].endMs)}</code><b>{p.boundaryComparison.originalScore.toFixed(2)}</b></div><div><span>Selected</span><code>{time(s.startMs)} → {time(s.endMs)}</code><b>{p.score.toFixed(2)}</b></div><p>{p.boundaryComparison.reason}</p></div>}<div className="warnings"><h3>Before you use this cut</h3>{[...p.warnings,...p.evaluation.weaknesses].map((w,i)=><p key={i}><TriangleAlert size={13}/>{w}</p>)}{p.diversityPenalty>0&&<p>Display-order diversity deduction: {p.diversityPenalty.toFixed(2)}. Raw score unchanged.</p>}</div><div className="script-heading"><h3>Source timeline</h3><label><input type="checkbox" checked={context} onChange={e=>setContext(e.target.checked)}/> Show surrounding context</label></div>{!ep?<LoaderCircle className="spin"/>:<>{context&&<div className="context-note"><b>Background metadata · not seen by the viewer</b><p>{ep.logline}</p><p>{ep.continuity}</p></div>}{ep.events.filter(e=>p.eventIds.includes(e.id)||context&&p.contextEventIds.includes(e.id)).map(e=><div className={'script-event '+(!p.eventIds.includes(e.id)?'outside':'')} key={e.id}><div><code>{time(e.startMs)} → {time(e.endMs)}</code><span>{p.eventIds.includes(e.id)?'IN CLIP':'OUTSIDE CLIP'}</span></div><strong>{e.label}</strong><p>{e.text}</p><small>{e.id} · {e.sourceFile.split('/').at(-1)} · lines {e.sourceLineStart}–{e.sourceLineEnd}</small></div>)}</>}</>:<><p className="help">Rate the actual clip, using included content only. 1 = unusable, 3 = needs work, 5 = ready to use. These values become human labels only when you save.</p>{(Object.keys(ratings) as (keyof Review['ratings'])[]).map(k=><div className="rating" key={k}><span>{k.charAt(0).toUpperCase()+k.slice(1)}</span><div>{[1,2,3,4,5].map(n=><button aria-label={`${k} rating ${n}`} className={ratings[k]===n?'active':''} key={n} onClick={()=>setRatings({...ratings,[k]:n})}>{n}</button>)}</div></div>)}<label className="field">Editorial decision<select value={label} onChange={e=>setLabel(e.target.value)}>{['Good promo','Needs boundary adjustment','Lacks context','Weak hook','Weak cliffhanger','Invalid timestamp','Other failure'].map(l=><option key={l}>{l}</option>)}</select></label><label className="field">Review notes<textarea maxLength={5000} rows={5} value={notes} onChange={e=>setNotes(e.target.value)} placeholder="What works? What would you change?"/></label>{err&&<p className="error">{err}</p>}<button className="button primary wide" disabled={saving} onClick={()=>{setSaving(true);setErr('');void onSave({ratings,label,notes}).catch(e=>setErr(e.message)).finally(()=>setSaving(false));}}>{saving?<LoaderCircle className="spin" size={16}/>:<Check size={16}/>}Save editorial review</button>{review&&<p className="help">Last saved {new Date(review.updatedAt).toLocaleString()}</p>}</>}</div></section></div>;}
-createRoot(document.getElementById('root')!).render(<React.StrictMode><App/></React.StrictMode>);
+const post = (body: unknown): RequestInit => ({
+  method: "POST",
+  headers: { "Content-Type": "application/json", "X-Kuku-Client": "local" },
+  body: JSON.stringify(body),
+});
+type DatasetSummary = Omit<Dataset, "episodes"> & {
+  episodeCount: number;
+  episodeNumbers: number[];
+};
+type Health = {
+  hosted?: boolean;
+  preferredModel?: string;
+  fallbackActive?: boolean;
+  groqBudgets?: {
+    model: string;
+    used: number;
+    limit: number;
+    remaining: number;
+    blocked: boolean;
+    resetsAt: string;
+  }[];
+  groqBudget?: {
+    model: string;
+    used: number;
+    limit: number;
+    remaining: number;
+    blocked: boolean;
+    resetsAt: string;
+  };
+  providers: { gemini: boolean; groq: boolean };
+  defaultModel: string;
+  defaultProvider: "groq" | "gemini";
+};
+function App() {
+  const [datasets, setDatasets] = useState<DatasetSummary[]>([]),
+    [dsId, setDsId] = useState(
+      () => localStorage.getItem("kuku.dataset") ?? "",
+    ),
+    [tab, setTab] = useState("library"),
+    [health, setHealth] = useState<Health | null>(null),
+    [result, setResult] = useState<Result | null>(null),
+    [error, setError] = useState(""),
+    [toast, setToast] = useState(""),
+    [loading, setLoading] = useState(true),
+    [job, setJob] = useState<Job | null>(null),
+    [selected, setSelected] = useState<Promo | null>(null),
+    [episode, setEpisode] = useState<Episode | null>(null);
+  const [search, setSearch] = useState(""),
+    [epFilter, setEpFilter] = useState("all"),
+    [reviewFilter, setReviewFilter] = useState("all"),
+    [minScore, setMinScore] = useState(0),
+    [maxDuration, setMaxDuration] = useState(60),
+    [sort, setSort] = useState("rank"),
+    [count, setCount] = useState(12),
+    [filters, setFilters] = useState(false),
+    [exportOpen, setExportOpen] = useState(false),
+    [downloadingRaw, setDownloadingRaw] = useState(false);
+  const [mode, setMode] = useState<"offline" | "ai">("ai"),
+    [provider, setProvider] = useState<"gemini" | "groq">("gemini"),
+    [model, setModel] = useState("gemini-2.5-flash"),
+    [limit, setLimit] = useState(1),
+    [weights, setWeights] = useState<Weights>(defaultWeights),
+    [uploading, setUploading] = useState(false),
+    [starting, setStarting] = useState(false);
+  const [evaluation, setEvaluation] = useState<{
+    metrics: Record<string, unknown>;
+    manifest: Record<string, unknown>;
+    baseline: Promo[];
+    failures: Record<string, unknown>[];
+    reviews: Review[];
+  } | null>(null);
+  const dsRef = useRef(dsId),
+    resultsRequest = useRef(0),
+    exportRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!exportOpen) return;
+    const dismiss = (e: PointerEvent) => {
+      if (!exportRef.current?.contains(e.target as Node)) setExportOpen(false);
+    };
+    const escape = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setExportOpen(false);
+        exportRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
+      }
+    };
+    document.addEventListener("pointerdown", dismiss);
+    document.addEventListener("keydown", escape);
+    return () => {
+      document.removeEventListener("pointerdown", dismiss);
+      document.removeEventListener("keydown", escape);
+    };
+  }, [exportOpen]);
+  const selectedBudget =
+    health?.groqBudgets?.find((b) => b.model === model) ??
+    (health?.groqBudget?.model === model ? health.groqBudget : undefined);
+  const budgetBlocked = provider === "groq" && selectedBudget?.blocked;
+  const ds = datasets.find((d) => d.id === dsId),
+    query = `datasetId=${dsId}`;
+  const notify = (s: string) => {
+    setToast(s);
+    setTimeout(() => setToast(""), 4000);
+  };
+  function chooseDataset(id: string) {
+    dsRef.current = id;
+    setDsId(id);
+    localStorage.setItem("kuku.dataset", id);
+  }
+  async function refreshDatasets() {
+    const list = await api<DatasetSummary[]>("/api/datasets");
+    setDatasets(list);
+    setDsId((id) => (list.some((d) => d.id === id) ? id : (list[0]?.id ?? "")));
+  }
+  useEffect(() => {
+    void Promise.all([
+      refreshDatasets(),
+      api<Health>("/api/health").then((h) => {
+        setHealth(h);
+        setModel(h.defaultModel);
+        setProvider(h.defaultProvider);
+      }),
+    ])
+      .catch((e) => setError(e.message))
+      .finally(() => setLoading(false));
+  }, []);
+  useEffect(() => {
+    const update = () => {
+      void api<Health>("/api/health")
+        .then(setHealth)
+        .catch(() => {});
+    };
+    const timer = setInterval(update, 30000);
+    window.addEventListener("focus", update);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener("focus", update);
+    };
+  }, []);
+  async function refreshResults(target = dsRef.current) {
+    if (!target) return;
+    const request = ++resultsRequest.current;
+    const r = await api<Result>(`/api/promos?datasetId=${target}`);
+    const ev = r.manifest
+      ? await api<NonNullable<typeof evaluation>>(
+          `/api/evaluation?datasetId=${target}`,
+        )
+      : null;
+    if (dsRef.current !== target || request !== resultsRequest.current) return;
+    setResult(r);
+    setEvaluation(ev);
+  }
+  useEffect(() => {
+    dsRef.current = dsId;
+    resultsRequest.current++;
+    setResult(null);
+    setEvaluation(null);
+    setSelected(null);
+    setError("");
+    setEpFilter("all");
+    setReviewFilter("all");
+    setSearch("");
+    setMinScore(0);
+    setMaxDuration(60);
+    setCount(12);
+    setExportOpen(false);
+    setJob((j) => (j?.datasetId === dsId ? j : null));
+    if (!dsId) return;
+    localStorage.setItem("kuku.dataset", dsId);
+    void refreshResults(dsId).catch((e) => {
+      if (dsRef.current === dsId) setError(e.message);
+    });
+    void api<Job | null>(`/api/analysis/active?datasetId=${dsId}`)
+      .then((j) => {
+        if (dsRef.current === dsId)
+          setJob(
+            (current) => j ?? (current?.datasetId === dsId ? current : null),
+          );
+      })
+      .catch((e) => {
+        if (dsRef.current === dsId) setError(e.message);
+      });
+  }, [dsId]);
+  useEffect(() => {
+    if (
+      !job ||
+      job.datasetId !== dsId ||
+      !["queued", "running"].includes(job.status)
+    )
+      return;
+    const target = dsId;
+    let stopped = false,
+      stepping = false,
+      failures = 0,
+      nextAttemptAt = 0;
+    const interval = setInterval(() => {
+      if (
+        stepping ||
+        Date.now() < nextAttemptAt ||
+        (job.retryAt && Date.parse(job.retryAt) > Date.now())
+      )
+        return;
+      stepping = true;
+      void (
+        health?.hosted
+          ? api<Job>(`/api/analysis/${job.id}/step`, post({}))
+          : api<Job>(`/api/analysis/${job.id}`)
+      )
+        .then((j) => {
+          if (stopped || dsRef.current !== target) return;
+          setJob(j);
+          failures = 0;
+          nextAttemptAt = 0;
+          setError((e) => (e.startsWith("Connection interrupted.") ? "" : e));
+          if (j.status === "running" && j.progress > 0)
+            void refreshResults(target).catch((e) => setError(e.message));
+          if (j.status === "complete") {
+            void refreshResults(target).catch((e) => setError(e.message));
+            notify("Analysis finished. Your shortlist is ready.");
+          }
+          if (j.status === "failed" || j.status === "interrupted")
+            setError(j.error ?? "Analysis stopped. You can run it again.");
+        })
+        .catch(() => {
+          if (!stopped && dsRef.current === target) {
+            failures++;
+            nextAttemptAt = Date.now() + Math.min(30000, 1500 * 2 ** failures);
+            if (failures >= 3)
+              setError(
+                "Connection interrupted. Retrying automatically; saved progress will be restored.",
+              );
+          }
+        })
+        .finally(() => {
+          stepping = false;
+        });
+    }, 1200);
+    return () => {
+      stopped = true;
+      clearInterval(interval);
+    };
+  }, [job?.id, job?.status, dsId, health?.hosted, job?.retryAt]);
+  useEffect(() => {
+    if (!selected) {
+      setEpisode(null);
+      return;
+    }
+    setEpisode(null);
+    const controller = new AbortController();
+    void api<Episode>(
+      `/api/episodes/${selected.segments[0].episode}?${query}`,
+      { signal: controller.signal },
+    )
+      .then(setEpisode)
+      .catch((e) => {
+        if (e.name !== "AbortError") setError(e.message);
+      });
+    return () => controller.abort();
+  }, [selected?.id, dsId]);
+  async function upload(file: File) {
+    if (uploading) return;
+    if (!file.name.toLowerCase().endsWith(".zip")) {
+      setError("Choose a .zip archive with timestamped .txt screenplays.");
+      return;
+    }
+    if (file.size > 15_000_000) {
+      setError(
+        "This ZIP exceeds the 15 MB upload limit. Please upload a smaller pack.",
+      );
+      return;
+    }
+    setUploading(true);
+    setError("");
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      type UploadResult = {
+        id: string;
+        job: Job | null;
+        resultReady: boolean;
+        reused: boolean;
+      };
+      let r: UploadResult;
+      if (health?.hosted) {
+        const pending = await api<{ uploadId: string; chunkSize: number }>(
+          "/api/datasets/upload-url",
+          post({ name: file.name, size: file.size }),
+        );
+        for (
+          let start = 0, index = 0;
+          start < file.size;
+          start += pending.chunkSize, index++
+        ) {
+          await api(`/api/datasets/uploads/${pending.uploadId}/${index}`, {
+            method: "PUT",
+            headers: {
+              "Content-Type": "application/octet-stream",
+              "X-Kuku-Client": "local",
+            },
+            body: file.slice(start, start + pending.chunkSize),
+          });
+        }
+        r = await api<UploadResult>(
+          "/api/datasets/upload-complete",
+          post({ uploadId: pending.uploadId }),
+        );
+      } else
+        r = await api<UploadResult>("/api/datasets/upload", {
+          method: "POST",
+          headers: { "X-Kuku-Client": "local" },
+          body: form,
+        });
+      await refreshDatasets();
+      chooseDataset(r.id);
+      setJob(r.job);
+      setMode("ai");
+      setLimit(1);
+      setTab("library");
+      notify(
+        r.reused
+          ? "This pack is already analyzed. Showing saved results."
+          : "ZIP imported. Creating a shortlist without AI calls.",
+      );
+      await refreshResults(r.id);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setUploading(false);
+    }
+  }
+  async function start() {
+    if (starting) return;
+    setStarting(true);
+    setError("");
+    try {
+      setHealth(await api<Health>("/api/health"));
+      const j = await api<Job>(
+        "/api/analysis/start",
+        post({ datasetId: dsId, mode, provider, model, limit, weights }),
+      );
+      setJob(j);
+      setTab("library");
+      notify(
+        mode === "offline"
+          ? "Creating your shortlist locally. No API calls."
+          : "AI analysis started. Cached results will be reused.",
+      );
+    } catch (e) {
+      const err = e as Error & { job?: Job };
+      if (err.job?.datasetId === dsId) {
+        setJob(err.job);
+        setTab("library");
+        notify("This screenplay is already being analyzed. Showing progress.");
+      } else setError(err.message);
+    } finally {
+      setStarting(false);
+    }
+  }
+  async function resume() {
+    if (!job || starting) return;
+    setStarting(true);
+    setError("");
+    try {
+      setJob(await api<Job>(`/api/analysis/${job.id}/resume`, post({})));
+      notify("Resuming saved progress.");
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setStarting(false);
+    }
+  }
+  const reviewed = new Set(result?.reviews.map((r) => r.promoId));
+  const filtered = (result?.promos ?? [])
+    .filter(
+      (p) =>
+        (epFilter === "all" || p.segments[0].episode === +epFilter) &&
+        (reviewFilter === "all" ||
+          (reviewFilter === "reviewed"
+            ? reviewed.has(p.id)
+            : !reviewed.has(p.id))) &&
+        p.score >= minScore &&
+        p.durationMs <= maxDuration * 1000 &&
+        JSON.stringify([
+          p.evaluation.reason,
+          p.evaluation.evidence,
+          p.segments[0].episode,
+        ])
+          .toLowerCase()
+          .includes(search.toLowerCase()),
+    )
+    .sort((a, b) =>
+      sort === "duration"
+        ? a.durationMs - b.durationMs
+        : sort === "episode"
+          ? a.segments[0].episode - b.segments[0].episode
+          : sort === "score"
+            ? b.score - a.score
+            : a.rank - b.rank,
+    );
+  const m = result?.metrics;
+  async function downloadRaw() {
+    if (!result?.runId || downloadingRaw) return;
+    setDownloadingRaw(true);
+    setExportOpen(false);
+    setError("");
+    try {
+      const response = await fetch(
+        `/api/export/raw-output.zip?datasetId=${dsId}&runId=${result.runId}`,
+      );
+      if (!response.ok) {
+        const body = await response.json();
+        throw new Error(body.error?.message ?? "Raw output download failed");
+      }
+      if (response.headers.get("content-type")?.includes("application/json")) {
+        const { downloadUrl } = await response.json();
+        window.location.assign(downloadUrl);
+        notify("Private raw output download is ready.");
+        return;
+      }
+      const blob = await response.blob(),
+        url = URL.createObjectURL(blob),
+        link = document.createElement("a");
+      link.href = url;
+      link.download = `kuku-raw-output-${result.runId}.zip`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+      notify("Raw output ZIP downloaded. It contains private evidence.");
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setDownloadingRaw(false);
+    }
+  }
+  function exportFile(file: string) {
+    window.location.assign(`/api/export/${file}?${query}`);
+    setExportOpen(false);
+  }
+  function resetFilters() {
+    setMinScore(0);
+    setMaxDuration(60);
+    setReviewFilter("all");
+    setEpFilter("all");
+    setSearch("");
+    setCount(12);
+  }
+  return (
+    <div className="shell">
+      <aside className="sidebar">
+        <a
+          className="brand"
+          href="#"
+          onClick={(e) => {
+            e.preventDefault();
+            setTab("library");
+          }}
+        >
+          <span className="brandmark">k</span>
+          <span>
+            kuku<span className="branddot">.</span>
+            <small>PROMO INTELLIGENCE</small>
+          </span>
+        </a>
+        <div className="workspace-label">YOUR WORKSPACE</div>
+        <nav aria-label="Workspace navigation">
+          {[
+            ["library", LayoutGrid, "Promo library"],
+            ["evaluation", ChartNoAxesCombined, "Evaluation"],
+            ["processing", FolderOpen, "Import & analyze"],
+          ].map(([id, Icon, label]) => {
+            const I = Icon as typeof LayoutGrid;
+            return (
+              <button
+                key={String(id)}
+                aria-label={String(label)}
+                aria-current={tab === id ? "page" : undefined}
+                className={tab === id ? "nav active" : "nav"}
+                onClick={() => setTab(String(id))}
+              >
+                <I size={18} />
+                <span>{String(label)}</span>
+                {id === "library" && (
+                  <span className="nav-count">
+                    {result?.promos.length ?? 0}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </nav>
+        <div className="sidebar-note">
+          <button onClick={() => setTab("processing")}>
+            <Upload size={16} /> Import screenplay
+          </button>
+          <p>ZIP / timestamped .txt</p>
+        </div>
+        <div className="private">
+          <span className="status-dot" />
+          <span>
+            {health?.hosted ? "Shared workspace" : "Local workspace"}
+            <small>
+              {health?.hosted
+                ? "Shared workspace / no sign-in"
+                : "Saved on this computer"}
+            </small>
+          </span>
+        </div>
+      </aside>
+      <div className="workspace">
+        <header className="topbar">
+          <div>
+            <span className="crumb">Workspace</span>
+            <ChevronRight size={13} />
+            <span>
+              {tab === "library"
+                ? "Promo library"
+                : tab === "evaluation"
+                  ? "Evaluation"
+                  : "Import & analyze"}
+            </span>
+          </div>
+          <div className="topright">
+            <span className="status-dot" />
+            {health?.hosted ? "Shared workspace" : "Local workspace"}
+          </div>
+        </header>
+        <main>
+          {error && (
+            <div className="error" role="alert">
+              <TriangleAlert size={17} />
+              {error}
+              <button aria-label="Dismiss error" onClick={() => setError("")}>
+                <X size={15} />
+              </button>
+            </div>
+          )}
+          <div className="page-heading">
+            <div>
+              <div className="eyebrow">SCREENPLAY / EDITORIAL</div>
+              <h1>
+                {tab === "library"
+                  ? "Promo library"
+                  : tab === "evaluation"
+                    ? "Analysis report"
+                    : "Import & analyze"}
+              </h1>
+              <p>
+                {tab === "library"
+                  ? "Compare source cuts and build your shortlist."
+                  : tab === "evaluation"
+                    ? "Coverage, scoring and results that need attention."
+                    : "Upload a ZIP of timestamped scripts to get started."}
+              </p>
+            </div>
+            <div className="heading-actions">
+              <div className="export-wrap" ref={exportRef}>
+                <button
+                  className="button"
+                  disabled={!result?.runId || downloadingRaw}
+                  aria-expanded={exportOpen}
+                  aria-controls="export-options"
+                  onClick={() => setExportOpen(!exportOpen)}
+                >
+                  {downloadingRaw ? (
+                    <LoaderCircle size={16} className="spin" />
+                  ) : (
+                    <Download size={16} />
+                  )}{" "}
+                  {downloadingRaw ? "Preparing ZIP..." : "Export"}{" "}
+                  <ChevronDown size={13} />
+                </button>
+                {exportOpen && (
+                  <div className="dropdown" id="export-options">
+                    <button onClick={() => void downloadRaw()}>
+                      <Download
+                        size={13}
+                        style={{ display: "inline", marginRight: 6 }}
+                      />
+                      Download raw output (.zip)
+                    </button>
+                    {[
+                      "promos.csv",
+                      "promos.json",
+                      "evaluation.json",
+                      "run_manifest.json",
+                      "reviews.json",
+                    ].map((f) => (
+                      <button key={f} onClick={() => exportFile(f)}>
+                        {f}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+              {tab !== "processing" && (
+                <button
+                  className="button primary"
+                  onClick={() => setTab("processing")}
+                >
+                  <Upload size={16} /> Import scripts
+                </button>
+              )}
+            </div>
+          </div>
+          {loading ? (
+            <div className="empty">
+              <LoaderCircle className="spin" />
+              Loading your workspace…
+            </div>
+          ) : (
+            <>
+              <section className="showbar">
+                <div className="show-icon">
+                  <Film size={22} />
+                </div>
+                <div className="show-text">
+                  <div className="tiny-label">Selected screenplay</div>
+                  <select
+                    aria-label="Current screenplay"
+                    value={dsId}
+                    onChange={(e) => chooseDataset(e.target.value)}
+                  >
+                    {!datasets.length && (
+                      <option value="">No screenplay loaded</option>
+                    )}
+                    {datasets.map((d) => (
+                      <option key={d.id} value={d.id}>
+                        {d.name.replace(/-scripts.*$/, "").replaceAll("_", " ")}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <span className="badge neutral">
+                  {ds?.episodeCount ?? 0} episodes
+                </span>
+                <span className="show-divider" />
+                <span className="badge success">
+                  <ShieldCheck size={13} />
+                  {ds ? "Parsed & traceable" : "Ready to import"}
+                </span>
+              </section>
+              <section
+                className="engine-status"
+                aria-label="Analysis service status"
+              >
+                <div className="engine-identity">
+                  <span
+                    className={
+                      "engine-dot " +
+                      (health?.providers.groq && !health.groqBudget?.blocked
+                        ? "ready"
+                        : "")
+                    }
+                  />
+                  <div>
+                    <strong>
+                      {health?.providers.groq ? "Groq AI" : "Local engine"}
+                    </strong>
+                    <span>
+                      {job?.retryAt
+                        ? "AI cooldown / progress saved"
+                        : health?.groqBudget?.blocked
+                          ? "Daily app budget reached"
+                          : "Cache enabled"}
+                    </span>
+                  </div>
+                </div>
+                <div className="engine-budget">
+                  <div>
+                    <span>App token budget</span>
+                    <strong>
+                      {Math.round((health?.groqBudget?.remaining ?? 0) / 1000)}k{" "}
+                      <small>remaining</small>
+                    </strong>
+                  </div>
+                  <meter
+                    min={0}
+                    max={health?.groqBudget?.limit ?? 190000}
+                    value={health?.groqBudget?.remaining ?? 0}
+                    aria-label="Remaining app token budget"
+                  />
+                  <span className="budget-caption">
+                    App estimate / Groq account limits also apply
+                  </span>
+                </div>
+              </section>
+              {job &&
+                job.datasetId === dsId &&
+                ["running", "queued"].includes(job.status) && (
+                  <div className="job">
+                    <LoaderCircle size={17} className="spin" />
+                    <span>
+                      {job.stage}
+                      {job.retryAt && (
+                        <small className="retry-time">
+                          Next attempt after{" "}
+                          {new Date(job.retryAt).toLocaleTimeString()}
+                        </small>
+                      )}
+                    </span>
+                    <progress
+                      aria-label="Analysis progress"
+                      value={job.progress}
+                      max={1}
+                    />
+                    <span>{Math.round(job.progress * 100)}%</span>
+                  </div>
+                )}
+              {job &&
+                job.datasetId === dsId &&
+                ["failed", "interrupted"].includes(job.status) && (
+                  <div className="recovery-banner">
+                    <TriangleAlert size={18} />
+                    <div>
+                      <strong>
+                        Analysis paused. Your saved results are available.
+                      </strong>
+                      <p>
+                        {job.error ?? "Resume from the last saved episode."}
+                      </p>
+                    </div>
+                    {health?.hosted ? (
+                      <button
+                        className="button"
+                        disabled={starting}
+                        onClick={() => void resume()}
+                      >
+                        Resume analysis <ArrowRight size={15} />
+                      </button>
+                    ) : (
+                      <button
+                        className="button"
+                        onClick={() => setTab("processing")}
+                      >
+                        Continue in processing
+                      </button>
+                    )}
+                  </div>
+                )}
+              {health?.groqBudget?.blocked && (
+                <div className="notice">
+                  <TriangleAlert size={18} />
+                  <div>
+                    <strong>
+                      {health.fallbackActive
+                        ? "Groq AI is available using GPT-OSS 20B"
+                        : "The preferred model has reached its local budget"}
+                    </strong>
+                    <p>
+                      {health.fallbackActive
+                        ? "GPT-OSS 120B is paused. The verified 20B fallback is selected for new AI runs; existing results keep their original model labels."
+                        : "Saved results remain usable. AI availability is checked automatically every 30 seconds."}{" "}
+                      Preferred-model local budget refresh:{" "}
+                      {new Date(health.groqBudget.resetsAt).toLocaleString(
+                        "en-IN",
+                        {
+                          timeZone: "Asia/Kolkata",
+                          month: "short",
+                          day: "numeric",
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        },
+                      )}{" "}
+                      IST. Groq account limits still apply.
+                    </p>
+                  </div>
+                </div>
+              )}
+              {result?.manifest?.status === "partial" && (
+                <div className="notice">
+                  <TriangleAlert size={18} />
+                  <div>
+                    <strong>AI analysis finished with limitations.</strong>
+                    <p>
+                      Showing saved results. Open Quality &amp; evaluation for
+                      coverage and failures. Local analysis is available without
+                      API calls.
+                    </p>
+                  </div>
+                </div>
+              )}
+              {tab === "library" && (
+                <>
+                  <section className="stats">
+                    {[
+                      [
+                        "Episodes analyzed",
+                        (result?.manifest?.mode === "ai"
+                          ? (m?.aiEpisodeSuccesses ?? m?.episodesAttempted)
+                          : m?.episodesAttempted) ?? 0,
+                        `${ds?.report.events.toLocaleString() ?? 0} timestamped events`,
+                      ],
+                      [
+                        "Intervals discovered",
+                        Number(m?.enumeratedCandidates ?? 0).toLocaleString(),
+                        "20–60 seconds · real event boundaries",
+                      ],
+                      [
+                        "Selected cuts",
+                        result?.promos.length ?? 0,
+                        result?.manifest?.mode === "ai"
+                          ? "AI-scored · evidence validated"
+                          : "Heuristic shortlist · needs editorial review",
+                      ],
+                      [
+                        "Reviewed",
+                        result?.reviews.length ?? 0,
+                        `${(result?.promos.length ?? 0) - (result?.reviews.length ?? 0)} awaiting your judgment`,
+                      ],
+                    ].map(([label, value, note]) => {
+                      return (
+                        <div className="stat" key={String(label)}>
+                          <div className="stat-label">{String(label)}</div>
+                          <strong>{String(value)}</strong>
+                          <small>{String(note)}</small>
+                        </div>
+                      );
+                    })}
+                  </section>
+                  <div className="section-heading">
+                    <div>
+                      <h2>
+                        Shortlist{" "}
+                        <span className="pill">{filtered.length}</span>
+                      </h2>
+                      <p>
+                        Compare the opening, the ending and the exact source
+                        range.
+                      </p>
+                    </div>
+                    <span className="badge warm">
+                      {result?.manifest?.mode === "ai"
+                        ? "AI judgments · not calibrated"
+                        : "Heuristic mode · AI evaluation pending"}
+                    </span>
+                  </div>
+                  <div className="toolbar">
+                    <div className="search">
+                      <Search size={16} />
+                      <input
+                        aria-label="Search promos"
+                        placeholder="Search dialogue, moments, or characters…"
+                        value={search}
+                        onChange={(e) => {
+                          setSearch(e.target.value);
+                          setCount(12);
+                        }}
+                      />
+                    </div>
+                    <select
+                      aria-label="Filter episode"
+                      value={epFilter}
+                      onChange={(e) => {
+                        setEpFilter(e.target.value);
+                        setCount(12);
+                      }}
+                    >
+                      <option value="all">All episodes</option>
+                      {(ds?.episodeNumbers ?? []).map((n) => (
+                        <option key={n} value={n}>
+                          Episode {n}
+                        </option>
+                      ))}
+                    </select>
+                    <select
+                      aria-label="Review status"
+                      value={reviewFilter}
+                      onChange={(e) => setReviewFilter(e.target.value)}
+                    >
+                      <option value="all">All review statuses</option>
+                      <option value="unreviewed">Unreviewed</option>
+                      <option value="reviewed">Reviewed</option>
+                    </select>
+                    <button
+                      aria-expanded={filters}
+                      aria-controls="shortlist-filters"
+                      className={
+                        "button filter-button " + (filters ? "pressed" : "")
+                      }
+                      onClick={() => setFilters(!filters)}
+                    >
+                      <SlidersHorizontal size={15} />
+                      Filters
+                    </button>
+                  </div>
+                  {filters && (
+                    <div className="filter-row" id="shortlist-filters">
+                      <label>
+                        Minimum score{" "}
+                        <input
+                          type="range"
+                          min="0"
+                          max="10"
+                          step="0.5"
+                          value={minScore}
+                          onChange={(e) => setMinScore(+e.target.value)}
+                        />
+                        {minScore.toFixed(1)}
+                      </label>
+                      <label>
+                        Maximum duration{" "}
+                        <input
+                          type="range"
+                          min="20"
+                          max="60"
+                          value={maxDuration}
+                          onChange={(e) => setMaxDuration(+e.target.value)}
+                        />
+                        {maxDuration}s
+                      </label>
+                      <button
+                        className="text-button"
+                        onClick={resetFilters}
+                      >
+                        Reset filters
+                      </button>
+                    </div>
+                  )}
+                  <div className="list-meta">
+                    <span>
+                      Showing {Math.min(count, filtered.length)} of{" "}
+                      {filtered.length} suggestions
+                    </span>
+                    <label>
+                      Sort by{" "}
+                      <select
+                        aria-label="Sort promos"
+                        value={sort}
+                        onChange={(e) => setSort(e.target.value)}
+                      >
+                        <option value="rank">Global rank</option>
+                        <option value="score">Score</option>
+                        <option value="episode">Episode</option>
+                        <option value="duration">Duration</option>
+                      </select>
+                    </label>
+                  </div>
+                  <div className="ledger-heading" aria-hidden="true">
+                    <span>Cut / source range</span>
+                    <span>Editorial evidence</span>
+                    <span>Score / review</span>
+                  </div>
+                  <section
+                    className="promo-list"
+                    aria-label="Ranked promo cuts"
+                  >
+                    {filtered.slice(0, count).map((p) => (
+                      <PromoRow
+                        key={p.id}
+                        promo={p}
+                        reviewed={reviewed.has(p.id)}
+                        onOpen={() => setSelected(p)}
+                      />
+                    ))}
+                  </section>
+                  {!filtered.length && (
+                    <div className="empty">
+                      <Scissors size={28} />
+                      <h3>
+                        {job && ["queued", "running"].includes(job.status)
+                          ? "Preparing your shortlist..."
+                          : result?.manifest
+                            ? "No matching suggestions"
+                            : "Ready for your first analysis"}
+                      </h3>
+                      <p>
+                        {job && ["queued", "running"].includes(job.status)
+                          ? "Your results will appear here automatically."
+                          : result?.manifest
+                            ? "Try changing your filters. Clips need a complete 20-60 second interval."
+                            : "Upload a screenplay ZIP to create your local shortlist automatically."}
+                      </p>
+                      <button
+                        className="button"
+                        onClick={() => result?.promos.length ? resetFilters() : setTab("processing")}
+                      >
+                        {result?.promos.length ? "Clear filters" : "Import / analyze"}
+                      </button>
+                    </div>
+                  )}
+                  {filtered.length > count && (
+                    <div className="load-more">
+                      <button
+                        className="button"
+                        onClick={() => setCount(count + 12)}
+                      >
+                        Show 12 more suggestions <ChevronDown size={15} />
+                      </button>
+                    </div>
+                  )}
+                  <div className="footnote">
+                    <FileText size={13} />
+                    {health?.hosted
+                      ? "Scripts, saved cuts and reviews are shared in this workspace."
+                      : "Source files and reviews are saved on this computer."}
+                  </div>
+                </>
+              )}
+              {tab === "processing" && (
+                <div className="processing-grid">
+                  <section className="panel">
+                    <div className="panel-title">
+                      <span className="step-number">01</span>
+                      <h2>Source files</h2>
+                    </div>
+                    <label
+                      className="dropzone"
+                      onDragOver={(e) => e.preventDefault()}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        if (e.dataTransfer.files[0])
+                          void upload(e.dataTransfer.files[0]);
+                      }}
+                    >
+                      <div className="upload-circle">
+                        {uploading ? (
+                          <LoaderCircle className="spin" />
+                        ) : (
+                          <FolderOpen size={29} />
+                        )}
+                      </div>
+                      <h3>
+                        {uploading
+                          ? "Parsing your pack…"
+                          : "Drop your screenplay ZIP here"}
+                      </h3>
+                      <p>
+                        Upload a ZIP of timestamped .txt screenplays. A local
+                        shortlist is created automatically.
+                      </p>
+                      <span className="button">
+                        Choose screenplay ZIP <ArrowUpRight size={15} />
+                      </span>
+                      <small>15 MB compressed · 30 MB expanded</small>
+                      <input
+                        aria-label="Upload screenplay ZIP"
+                        type="file"
+                        accept=".zip,application/zip,application/x-zip-compressed"
+                        disabled={uploading}
+                        onChange={(e) => {
+                          if (e.target.files?.[0])
+                            void upload(e.target.files[0]);
+                          e.target.value = "";
+                        }}
+                      />
+                    </label>
+                    {ds && (
+                      <div className="parse-summary">
+                        <h3>Parsing report</h3>
+                        <dl>
+                          <dt>Files discovered / parsed</dt>
+                          <dd>
+                            {ds.report.discovered} / {ds.report.parsed}
+                          </dd>
+                          <dt>Scenes / timed events</dt>
+                          <dd>
+                            {ds.report.scenes} /{" "}
+                            {ds.report.events.toLocaleString()}
+                          </dd>
+                          <dt>Legitimate overlapping pairs</dt>
+                          <dd>{ds.report.overlapPairs.toLocaleString()}</dd>
+                          <dt>Invalid timed records</dt>
+                          <dd>{ds.report.invalidRecords}</dd>
+                          <dt>Warnings / files to inspect</dt>
+                          <dd>
+                            {ds.report.warnings.length} /{" "}
+                            {ds.report.manualReviewFiles.length}
+                          </dd>
+                        </dl>
+                        {ds.report.warnings.map((w, i) => (
+                          <p className="warning-text" key={i}>
+                            {w.code}: {w.message}
+                          </p>
+                        ))}
+                      </div>
+                    )}
+                  </section>
+                  <section className="panel">
+                    <div className="panel-title">
+                      <span className="step-number">02</span>
+                      <h2>Analysis settings</h2>
+                    </div>
+                    <label className="field">
+                      Selection engine
+                      <select
+                        value={mode}
+                        onChange={(e) => {
+                          setMode(e.target.value as typeof mode);
+                          setLimit(e.target.value === "ai" ? 1 : 6);
+                        }}
+                      >
+                        <option value="offline">
+                          Deterministic shortlist (no API)
+                        </option>
+                        <option value="ai">
+                          AI evaluation + independent baseline
+                        </option>
+                      </select>
+                    </label>
+                    <p className="help">
+                      {mode === "offline"
+                        ? "Runs on all episodes. Lexical scores discover promising cuts; narrative quality remains unverified."
+                        : "Evaluates real candidates, compares nearby cuts, and independently asks the same model to select baseline clips."}
+                    </p>
+                    {mode === "ai" && (
+                      <>
+                        <label className="field">
+                          Provider
+                          <select
+                            value={provider}
+                            onChange={(e) => {
+                              const p = e.target.value as typeof provider;
+                              setProvider(p);
+                              setModel(
+                                p === "groq"
+                                  ? "openai/gpt-oss-120b"
+                                  : "gemini-2.5-flash",
+                              );
+                            }}
+                          >
+                            <option value="gemini">Google Gemini</option>
+                            <option value="groq">Groq</option>
+                          </select>
+                        </label>
+                        <label className="field">
+                          Model ID
+                          <input
+                            value={model}
+                            onChange={(e) => setModel(e.target.value)}
+                          />
+                        </label>
+                        {provider === "groq" &&
+                          health?.fallbackActive &&
+                          model === "openai/gpt-oss-20b" && (
+                            <p className="help">
+                              Free-tier fallback: GPT-OSS 20B. Connection
+                              verified. Scores are recorded with this model ID;
+                              this is not a paid-provider switch.
+                            </p>
+                          )}
+                        <div
+                          className={
+                            "credential " +
+                            (health?.providers[provider] ? "configured" : "")
+                          }
+                        >
+                          <Settings2 size={15} />
+                          {health?.providers[provider]
+                            ? "Server credential configured"
+                            : health?.hosted
+                              ? "Key missing. Add it in Vercel environment settings and redeploy."
+                              : "Key missing. Add it to .env and restart the backend."}
+                        </div>
+                      </>
+                    )}
+                    {mode === "ai" && budgetBlocked && (
+                      <p className="credential">
+                        The local daily token budget cannot fit another request.
+                        Choose deterministic analysis for immediate results
+                        without API calls.
+                      </p>
+                    )}
+                    <label className="field">
+                      Candidates per episode
+                      <input
+                        type="number"
+                        min="1"
+                        max={health?.hosted && mode === "ai" ? 1 : 20}
+                        value={limit}
+                        onChange={(e) =>
+                          setLimit(
+                            Math.max(
+                              1,
+                              Math.min(
+                                health?.hosted && mode === "ai" ? 1 : 20,
+                                Number(e.target.value) || 1,
+                              ),
+                            ),
+                          )
+                        }
+                      />
+                    </label>
+                    <details className="weight-settings">
+                      <summary>
+                        Ranking weights <ChevronDown size={14} />
+                      </summary>
+                      <p className="help">
+                        Weights are normalized. A diversity deduction of up to
+                        0.30 affects display order; the raw score stays visible.
+                      </p>
+                      {criteria.map((k) => (
+                        <label className="weight" key={k}>
+                          {titles[k]}
+                          <input
+                            type="number"
+                            min="0"
+                            max="1"
+                            step=".05"
+                            value={weights[k]}
+                            onChange={(e) =>
+                              setWeights({ ...weights, [k]: +e.target.value })
+                            }
+                          />
+                        </label>
+                      ))}
+                    </details>
+                    <button
+                      className="button primary wide"
+                      disabled={
+                        !dsId ||
+                        starting ||
+                        uploading ||
+                        (!!job &&
+                          job.datasetId === dsId &&
+                          ["running", "queued"].includes(job.status)) ||
+                        (mode === "ai" &&
+                          (!health?.providers[provider] || budgetBlocked))
+                      }
+                      onClick={() => void start()}
+                    >
+                      <Sparkles size={17} />
+                      Run {mode === "ai" ? "AI" : "deterministic"} analysis
+                      <ArrowRight size={16} />
+                    </button>
+                    <p className="help">
+                      Settings and source hashes are saved with every run. Cuts
+                      are continuous, 20-60 seconds.
+                    </p>
+                  </section>
+                </div>
+              )}
+              {tab === "evaluation" && (
+                <EvaluationView
+                  data={evaluation}
+                  result={result}
+                  onOpen={setSelected}
+                />
+              )}
+            </>
+          )}
+        </main>
+        <footer>
+          Kuku Promo Intelligence <span>Script analysis workspace</span>
+          <span className="footer-right">KUKU / PROMO TOOLS</span>
+        </footer>
+      </div>
+      {toast && (
+        <div className="toast" role="status">
+          <Check size={17} />
+          {toast}
+        </div>
+      )}
+      {selected && (
+        <Detail
+          promo={selected}
+          episode={episode}
+          review={result?.reviews.find((r) => r.promoId === selected.id)}
+          onClose={() => setSelected(null)}
+          onSave={async (body) => {
+            const review = await api<Review>(
+              `/api/promos/${selected.id}/review`,
+              post({ ...body, datasetId: dsId, runId: result?.runId }),
+            );
+            setResult((r) =>
+              r
+                ? {
+                    ...r,
+                    reviews: [
+                      ...r.reviews.filter((x) => x.promoId !== review.promoId),
+                      review,
+                    ],
+                  }
+                : r,
+            );
+            notify("Editorial review saved.");
+          }}
+        />
+      )}
+    </div>
+  );
+}
+createRoot(document.getElementById("root")!).render(
+  <React.StrictMode>
+    <App />
+  </React.StrictMode>,
+);
