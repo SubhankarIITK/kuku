@@ -13,6 +13,7 @@
   --quiet: #666d5e;
   --line: #d9ddd0;
   --soft-line: #e9ece1;
+  --control-line: #858f76;
   --accent: #b7432d;
   --accent-wash: #f8ece6;
   --positive: #416449;
@@ -311,7 +312,7 @@ main {
   gap: 8px;
   min-height: 40px;
   padding: 9px 13px;
-  border: 1px solid #bfc6b3;
+  border: 1px solid var(--control-line);
   border-radius: var(--radius);
   background: var(--paper);
   font-size: 13px;
@@ -591,7 +592,7 @@ main {
 }
 .toolbar select,
 .list-meta select {
-  border: 1px solid var(--line);
+  border: 1px solid var(--control-line);
   border-radius: 3px;
   padding: 8px;
   min-height: 35px;
@@ -1059,7 +1060,7 @@ dd {
 .field textarea {
   width: 100%;
   padding: 10px 11px;
-  border: 1px solid #c6cebb;
+  border: 1px solid var(--control-line);
   border-radius: 3px;
   background: var(--paper);
   font-size: 14px;
@@ -1122,7 +1123,7 @@ dd {
 .weight input {
   width: 75px;
   padding: 6px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--control-line);
   border-radius: 2px;
   background: var(--paper);
   font-size: 13px;
@@ -1552,7 +1553,7 @@ td {
   width: 35px;
   height: 34px;
   background: none;
-  border: 1px solid var(--line);
+  border: 1px solid var(--control-line);
   border-radius: 3px;
   font-size: 12px;
   color: var(--secondary);

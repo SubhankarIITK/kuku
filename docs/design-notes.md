@@ -18,7 +18,7 @@ The library is a list; import is a two-part workbench with source files first an
 - Source rows, evaluation and the evidence/review inspector are separate React components; display formatting and result types are shared.
 - At medium widths, evidence stacks within each row. At phone widths, source and decision share the top of a row, with evidence underneath. Import becomes sequential. The export dropdown stays inside the viewport.
 - Navigation names, selected-page state, progress labeling, rating pressed state, visible keyboard focus, reduced-motion preferences and export Escape/outside-click dismissal are explicit. Existing drawer focus trapping and focus restoration are retained.
-- Secondary and primary text colors were checked numerically against their intended surfaces. Primary ink exceeds 14:1 on paper; the accent exceeds 5:1 on paper; quiet rail text is at least 4.5:1.
+- Secondary and primary text colors were checked numerically against their intended surfaces. Primary ink exceeds 14:1 on paper; the accent exceeds 5:1 on paper; quiet rail text is at least 4.5:1. Interactive control outlines use a separate token with 3.36:1 contrast on paper.
 - Functional behavior and backend contracts are preserved. Hosted AI candidate input now respects the existing one-candidate server limit. No new inference or UI dependencies are introduced.
 
 ## Verification limits
