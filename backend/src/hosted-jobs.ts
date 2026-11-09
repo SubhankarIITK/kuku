@@ -6,10 +6,10 @@ import {rank} from './engine.js';
 import type {Dataset,Job,Run} from './types.js';
 
 interface HostedJob extends Job {options:RunOptions;episodeNumbers:number[];cursor:number;baselineEpisodes:number[]}
-export async function activeHostedJob(datasetId?:string):Promise<Job|null>{
+export async function activeHostedJob(datasetId?:string,includeStopped=false):Promise<Job|null>{
   if(!datasetId)return null;
   const pointer=await read<{id:string}>(`data/active-${datasetId}.json`).catch(()=>null);if(!pointer)return null;
-  const job=await read<HostedJob>(`data/jobs/${pointer.id}.json`).catch(()=>null);return job&&['queued','running'].includes(job.status)?job:null;
+  const job=await read<HostedJob>(`data/jobs/${pointer.id}.json`).catch(()=>null);return job&&(includeStopped?['queued','running','failed','interrupted']:['queued','running']).includes(job.status)?job:null;
 }
 export async function createHostedJob(ds:Dataset,options:RunOptions):Promise<Job>{
   if(options.mode==='ai'&&options.limit!==1)throw new Error('Hosted AI analysis uses one candidate per episode to stay within free-tier runtime limits.');
@@ -48,6 +48,8 @@ export async function stepHostedJob(id:string):Promise<Job>{
   let modelLock:string|undefined;
   try{
     const job=await read<HostedJob>(`data/jobs/${id}.json`);if(!['queued','running'].includes(job.status))return job;
+    if(job.retryAt&&Date.parse(job.retryAt)>Date.now())return job;
+    delete job.retryAt;delete job.error;
     if(!job.options||!job.episodeNumbers)throw new Error('This job was created locally and cannot be resumed in the hosted worker. Start a new analysis.');
     if(job.options.mode==='ai'){modelLock=`model:${job.options.provider}:${job.options.model??'default'}`;if(!await acquireLease(modelLock,owner,330)){modelLock=undefined;return {...job,stage:'Waiting for another AI request to finish'};}}
     const ds=await read<Dataset>(`data/datasets/${job.datasetId}.json`),episode=job.episodeNumbers[job.cursor];
@@ -55,11 +57,30 @@ export async function stepHostedJob(id:string):Promise<Job>{
     if(!(existing?.manifest.completedEpisodes as number[]|undefined)?.includes(episode)){
       job.status='running';job.stage=`Analyzing episode ${episode} (${job.cursor+1}/${job.episodeNumbers.length})`;await save(`data/jobs/${id}.json`,job);
       const part=await analyze(ds,{...job.options,episodes:[episode],baselineEpisodes:job.options.mode==='ai'&&job.baselineEpisodes.includes(episode)?[episode]:[],publish:false},async(_p,stage)=>{job.stage=stage;await save(`data/jobs/${id}.json`,job);});
-      if(job.options.mode==='ai'&&!part.promos.length){job.status='failed';job.error=String(part.failures.find(f=>f.error)?.error??'This episode returned no usable AI clip.');job.stage='AI stopped; previous results preserved';await save(`data/jobs/${id}.json`,job);return job;}
+      if(job.options.mode==='ai'&&!part.promos.length){if(typeof part.manifest.retryAt==='string'){job.status='running';job.retryAt=part.manifest.retryAt;job.stage='AI paused for quota cooldown. Saved progress will resume automatically.';await save(`data/jobs/${id}.json`,job);return job;}job.status='failed';job.error=String(part.failures.find(f=>f.error)?.error??'This episode returned no usable AI clip.');job.stage='AI stopped; previous results preserved';await save(`data/jobs/${id}.json`,job);return job;}
       await appendEpisode(job,ds,part,episode);
+    }else if(existing?.manifest.published){
+      // Recover a crash between committing the episode and publishing the dataset pointer.
+      await save(`data/latest-${ds.id}.json`,{runId:job.id});
     }
-    job.cursor++;job.progress=job.cursor/job.episodeNumbers.length;job.runId=id;job.status=job.cursor===job.episodeNumbers.length?'complete':'running';job.stage=job.status==='complete'?'Analysis complete; exports are ready':`${job.cursor}/${job.episodeNumbers.length} episodes saved. Keep this tab open to continue.`;
+    job.recoveryAttempts=0;job.cursor++;job.progress=job.cursor/job.episodeNumbers.length;job.runId=id;job.status=job.cursor===job.episodeNumbers.length?'complete':'running';job.stage=job.status==='complete'?'Analysis complete; exports are ready':`${job.cursor}/${job.episodeNumbers.length} episodes saved. Keep this tab open to continue.`;
     await save(`data/jobs/${id}.json`,job);return job;
-  }catch(e){const job=await read<HostedJob>(`data/jobs/${id}.json`);job.status='failed';job.error=(e as Error).message;job.stage='Analysis stopped; saved results preserved';await save(`data/jobs/${id}.json`,job);return job;}
+  }catch(e){const job=await read<HostedJob>(`data/jobs/${id}.json`);job.recoveryAttempts=(job.recoveryAttempts??0)+1;job.error=(e as Error).message;if(job.recoveryAttempts<=3){job.status='running';job.retryAt=new Date(Date.now()+Math.min(120000,10000*2**job.recoveryAttempts)).toISOString();job.stage='Temporary interruption. Retrying from the last saved episode.';}else{job.status='failed';job.stage='Paused after repeated interruptions. Resume when ready.';}await save(`data/jobs/${id}.json`,job);return job;}
   finally{if(modelLock)await releaseLease(modelLock,owner);await releaseLease(lock,owner);}
+}
+
+export async function resumeHostedJob(id:string):Promise<Job>{
+  const owner=randomUUID(),lock=`step:${id}`;
+  if(!await acquireLease(lock,owner,330))return read<HostedJob>(`data/jobs/${id}.json`);
+  let datasetLock:string|undefined;
+  try{
+    const job=await read<HostedJob>(`data/jobs/${id}.json`);
+    if(!['failed','interrupted'].includes(job.status))return job;
+    if(!job.options||!job.episodeNumbers)throw new Error('Start a new analysis for this legacy job.');
+    datasetLock=`create:${job.datasetId}`;if(!await acquireLease(datasetLock,owner,30)){datasetLock=undefined;throw new Error('Another request is updating this screenplay. Retry shortly.');}
+    const active=await activeHostedJob(job.datasetId);if(active&&active.id!==id)throw new Error('Another analysis is already running for this screenplay.');
+    job.status='queued';job.recoveryAttempts=0;delete job.error;delete job.retryAt;
+    job.stage='Resuming from the last saved episode. Cached responses will be reused.';
+    await save(`data/jobs/${id}.json`,job);await save(`data/active-${job.datasetId}.json`,{id});return job;
+  }finally{if(datasetLock)await releaseLease(datasetLock,owner);await releaseLease(lock,owner);}
 }

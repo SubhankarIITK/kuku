@@ -2,8 +2,31 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {z} from 'zod';
-import {RemoteProvider} from '../backend/src/llm.js';
+import {RemoteProvider,DeferredProviderError,retryTime} from '../backend/src/llm.js';
 import {read} from '../backend/src/storage.js';
+
+test('retry times accept seconds and HTTP dates and have a safe floor',()=>{
+  const now=Date.UTC(2026,0,1);
+  assert.equal(Date.parse(retryTime('3600',now))-now,3601000);
+  assert.equal(Date.parse(retryTime(new Date(now+20000).toUTCString(),now))-now,21000);
+  assert.equal(Date.parse(retryTime('0',now))-now,6000);
+  assert.equal(Date.parse(retryTime('invalid',now))-now,61000);
+});
+
+for(const status of [429,503,401])test(`HTTP ${status} stops repeated calls and preserves the provider record`,async()=>{
+  const originalFetch=globalThis.fetch;
+  const previous={key:process.env.GROQ_API_KEY,tpm:process.env.LLM_TOKENS_PER_MINUTE,budget:process.env.LLM_DAILY_TOKEN_BUDGET};
+  process.env.GROQ_API_KEY='synthetic-key';process.env.LLM_TOKENS_PER_MINUTE='1000000';process.env.LLM_DAILY_TOKEN_BUDGET='1000000';
+  let calls=0;const run=`synthetic-cooldown-${randomUUID()}`,model=`synthetic-${randomUUID()}`;
+  globalThis.fetch=async()=>{calls++;return new Response('{"error":"synthetic"}',{status,headers:{'retry-after':'3600'}});};
+  try{
+    const provider=new RemoteProvider(run,'groq',model),schema=z.object({value:z.string()});
+    await assert.rejects(provider.generateStructured('Synthetic only',schema,{label:'failure',retries:3}),status===401?/Provider HTTP 401/:(e:unknown)=>e instanceof DeferredProviderError&&Date.parse(e.retryAt)>Date.now()+3500000);
+    assert.equal(calls,1);assert.equal(provider.usage.retries,0);
+    assert.equal((await read<{status:number}>(`outputs/${run}/raw/failure-attempt1.json`)).status,status);
+    if(status!==401){await assert.rejects(provider.generateStructured('Synthetic only',schema,{label:'again'}),DeferredProviderError);assert.equal(calls,1);}
+  }finally{globalThis.fetch=originalFetch;for(const [key,value]of Object.entries({GROQ_API_KEY:previous.key,LLM_TOKENS_PER_MINUTE:previous.tpm,LLM_DAILY_TOKEN_BUDGET:previous.budget}))if(value===undefined)delete process.env[key];else process.env[key]=value;}
+});
 test('local budget exhaustion makes zero network calls and is not retried',async()=>{
   const originalFetch=globalThis.fetch,oldKey=process.env.GROQ_API_KEY,oldBudget=process.env.LLM_DAILY_TOKEN_BUDGET;
   process.env.GROQ_API_KEY='synthetic-test-key';process.env.LLM_DAILY_TOKEN_BUDGET='1';let calls=0;

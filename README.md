@@ -89,3 +89,8 @@ In the Promo library, select the screenplay, open **Export**, and choose **Downl
 ## Vercel deployment with MongoDB Atlas
 
 Both the frontend and Express API can be deployed in one Vercel project. See [the complete deployment guide](docs/deploy-vercel.md) for Atlas setup, environment variables, password-free shared access, chunked ZIP uploads and resumable analysis. The hosted database adapter is enabled by Vercel or `STORAGE_BACKEND=mongodb`; local JSON storage remains the default on your computer. No private local datasets are uploaded automatically. A live Vercel/Atlas deployment still needs your account configuration and has not been claimed as verified.
+
+
+### Recovery on Groq free tier
+
+Hosted AI jobs checkpoint each episode. Provider 429/5xx responses persist a shared per-model cooldown and pause advancement until its retry time; they do not repeatedly spend requests inside one function. Authentication/configuration errors stop promptly. Browser connection errors retry with backoff without changing persisted job state. Interrupted/failed hosted jobs offer **Resume analysis** at the same cursor, retaining saved episodes and response caches. Hosted calls cap provider timeouts at 45 seconds and retries at one. Inference can still pause for organization-wide Groq limits, outages or exhausted quotas; browser-driven advancement needs an open page. Offline results, saved exports and reviews remain independent of new inference.

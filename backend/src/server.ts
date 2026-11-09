@@ -13,7 +13,7 @@ import {defaultWeights,type Dataset,type Job,type Review,type Run} from './types
 import {groqBudget,budgetMessage} from './budget.js';
 import {rawOutputArchive} from './raw-export.js';
 import {hosted,cloud,acquireLease} from './cloud.js';
-import {activeHostedJob,createHostedJob,stepHostedJob} from './hosted-jobs.js';
+import {activeHostedJob,createHostedJob,stepHostedJob,resumeHostedJob} from './hosted-jobs.js';
 const app=express();app.disable('x-powered-by');app.use(express.json({limit:'100kb'}));
 const port=Number(process.env.PORT??3001);
 app.use('/api',(req,res,next)=>{
@@ -93,8 +93,9 @@ app.post('/api/analysis/start',async(req,res)=>{
   const ds=await dataset(options.datasetId);if(options.episodes?.some(n=>!ds.episodes.some(e=>e.number===n)))throw new Error('Selected episode not in dataset');
   res.status(202).json(await launchJob(ds,options));
 });
-app.get('/api/analysis/active',async(req,res)=>{const id=req.query.datasetId===undefined?undefined:idSchema.parse(req.query.datasetId);if(hosted){res.json(await activeHostedJob(id));return;}const external=await externalJob();res.json(id?(activeJobs.get(id)??(external?.datasetId===id?external:null)):([...activeJobs.values()][0]??external));});
+app.get('/api/analysis/active',async(req,res)=>{const id=req.query.datasetId===undefined?undefined:idSchema.parse(req.query.datasetId);if(hosted){res.json(await activeHostedJob(id,true));return;}const external=await externalJob();res.json(id?(activeJobs.get(id)??(external?.datasetId===id?external:null)):([...activeJobs.values()][0]??external));});
 app.post('/api/analysis/:id/step',async(req,res)=>{if(!hosted){res.status(400).json({error:{code:'LOCAL_WORKER',message:'Local jobs run automatically'}});return;}res.json(await stepHostedJob(idSchema.parse(req.params.id)));});
+app.post('/api/analysis/:id/resume',async(req,res)=>{if(!hosted){res.status(400).json({error:{code:'LOCAL_WORKER',message:'Start a new local analysis to reuse cached results'}});return;}res.json(await resumeHostedJob(idSchema.parse(req.params.id)));});
 app.get('/api/analysis/:id',async(req,res)=>res.json(await read<Job>(`data/jobs/${idSchema.parse(req.params.id)}.json`)));
 app.get('/api/episodes',async(req,res)=>{const ds=await dataset(req.query.datasetId);res.json(ds.episodes.map(e=>({number:e.number,durationMs:e.durationMs,events:e.events.length,scenes:e.scenes.length,warnings:e.warnings.length,logline:e.logline})));});
 app.get('/api/episodes/:number',async(req,res)=>{const ds=await dataset(req.query.datasetId);const ep=ds.episodes.find(e=>e.number===episodeSchema.parse(req.params.number));if(!ep){res.status(404).json({error:{code:'NOT_FOUND',message:'Episode not found'}});return;}res.json(ep);});

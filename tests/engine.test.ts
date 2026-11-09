@@ -6,13 +6,24 @@ import {enumerate,makeCandidate,validate,heuristic,rank,weighted,overlap,shortli
 import {analyze,toCSV} from '../backend/src/pipeline.js';
 import {defaultWeights,type Promo,type Episode} from '../backend/src/types.js';
 import type {LLMProvider} from '../backend/src/llm.js';
-import {evaluationSchema} from '../backend/src/llm.js';
+import {evaluationSchema,DeferredProviderError} from '../backend/src/llm.js';
 import {read,save} from '../backend/src/storage.js';
 import {z} from 'zod';
 import {guardBoundary,meaningfulChange} from '../backend/src/boundaries.js';
 // Synthetic lines use the actual bold-label and Start/End convention; no company dialogue in source.
 function script(){return `EPISODE NUMBER: Episode 1\nEPISODE LOGLINE: Hidden metadata, not clip content.\nCONTINUITY NOTES: A previous betrayal.\n--- SCRIPT START ---\nSCENE 01\nScene heading: INT. HALL - DAY\nScene start: 00:00.00\nScene end: 01:10.00\n\n`+Array.from({length:14},(_,i)=>`**${i%2?'PERSON B (Shocked)':'PERSON A (Demanding)'}:**\nStart: (00:${String(i*5).padStart(2,'0')}.00) | End: (00:${String(i*5+4).padStart(2,'0')}.00)\n"${i%2?'What is this secret?':'You betrayed me. Why?'}"\n\n`).join('').replaceAll('00:60','01:00').replaceAll('00:64','01:04').replaceAll('00:65','01:05').replaceAll('00:69','01:09')+'--- SCRIPT END ---';}
 const ep=()=>parseEpisode(script(),'episode-001.txt');
+
+test('quota cooldown is preserved in run metadata without publishing an empty shortlist',async()=>{
+  const ds=makeDataset([{name:'episode-001.txt',text:script()}],'synthetic-recovery');
+  const retryAt=new Date(Date.now()+60000).toISOString();
+  const provider:LLMProvider={model:'synthetic',async generateStructured(){throw new DeferredProviderError('synthetic cooldown',retryAt);}};
+  const run=await analyze(ds,{mode:'ai',provider:'groq',limit:1,weights:defaultWeights,baselineEpisodes:[]},undefined,provider);
+  assert.equal(run.manifest.retryAt,retryAt);
+  assert.equal(run.manifest.published,false);
+  assert.equal(run.promos.length,0);
+  assert.equal(run.manifest.status,'partial');
+});
 const promo=(e:Episode,start=0,end=24000):Promo=>{const c=makeCandidate(e,start,end),evaluation=heuristic(c,e);return {...c,evaluation,score:weighted(evaluation),rank:0,validation:validate(c,[e],evaluation),warnings:[],diversityPenalty:0};};
 test('timestamps preserve centiseconds and accept hour/millisecond variants',()=>{assert.equal(timestamp('01:03.40'),63400);assert.equal(timestamp('1:02:03.045'),3723045);assert.equal(timestamp('00:01,5'),1500);for(const s of ['xx','01:60.00','-1:00.00','1:99:00'])assert.throws(()=>timestamp(s));});
 test('scene metadata is not mistaken for new scenes; dialogue retains provenance',()=>{const e=ep();assert.equal(e.scenes.length,1);assert.equal(e.scenes[0].startMs,0);assert.equal(e.scenes[0].endMs,70000);assert.equal(e.events.length,14);assert.equal(e.events[0].speaker,'PERSON A');assert.equal(e.events[0].originalEnd,'00:04.00');assert.ok(e.events[0].sourceLineStart>9);assert.ok(e.events[0].sourceLineEnd>=e.events[0].sourceLineStart);assert.equal(e.events[0].sceneId,e.scenes[0].id);});

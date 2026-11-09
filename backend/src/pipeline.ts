@@ -10,6 +10,8 @@ export async function analyze(ds:Dataset,options:RunOptions,onProgress:(progress
   const provider=options.mode==='ai'?(injected??new RemoteProvider(id,options.provider,options.model)):null;
   const episodes=options.episodes?ds.episodes.filter(e=>options.episodes!.includes(e.number)):ds.episodes;
   if(!episodes.length)throw new Error('No episodes selected');
+  const recovery: {retryAt?:string}={};
+  function failure(error:unknown){if(error&&typeof error==='object'&&'retryAt' in error)recovery.retryAt=String(error.retryAt);return (error as Error).message;}
   const candidates:Candidate[]=[],evaluations:Evaluation[]=[],collected:Promo[]=[],baseline:Promo[]=[],failures:Record<string,unknown>[]=[];let enumerated=0,attempted=0,aiEpisodeSuccesses=0,baselineAttempted=0;
   const pkg=(c:Candidate,e:Evaluation,ep:typeof episodes[number]):Promo=>({...c,evaluation:e,score:weighted(e,options.weights),rank:0,validation:validate(c,episodes,e),warnings:boundaryWarnings(c,ep),diversityPenalty:0});
   const concurrency=provider instanceof RemoteProvider&&provider.kind==='groq'?1:Math.min(4,Math.max(1,Number(process.env.LLM_CONCURRENCY??2)));
@@ -37,11 +39,11 @@ export async function analyze(ds:Dataset,options:RunOptions,onProgress:(progress
         };
         const original=await evaluate(c);evaluations.push(original);let best=c,ev=original;
         // Refine a nearby real-boundary alternative; preserve original when it does not improve.
-        for(const alt of alternatives){candidates.push({...alt,originalId:c.id});try{const ae=await evaluate(alt);evaluations.push(ae);if(!validate(alt,episodes,ae).length&&weighted(ae,options.weights)>weighted(ev,options.weights)){best=alt;ev=ae;}}catch(e){failures.push({stage:'boundary_evaluation',candidateId:alt.id,error:(e as Error).message});}}
+        for(const alt of alternatives){candidates.push({...alt,originalId:c.id});try{const ae=await evaluate(alt);evaluations.push(ae);if(!validate(alt,episodes,ae).length&&weighted(ae,options.weights)>weighted(ev,options.weights)){best=alt;ev=ae;}}catch(e){failures.push({stage:'boundary_evaluation',candidateId:alt.id,error:failure(e)});}}
         const p=pkg(best,ev,ep);p.boundaryComparison={original:c,originalScore:weighted(original,options.weights),selectedScore:weighted(ev,options.weights),reason:best.id===c.id?'No evaluated neighboring cut improved the score; retained original.':'Nearby event-boundary alternative scored higher under the same criteria. Script-level cuts need footage review.'};
         collected.push(guardBoundary(p,episodes,evaluations,options.weights));if(provider)epAI=true;
         if(ev.scores.hook<5||ev.scores.cliffhanger<5||ev.scores.standaloneClarity<5||p.validation.length)failures.push({stage:'selection',candidateId:p.id,segments:p.segments,whySelected:ev.reason,whyWeak:ev.weaknesses,scores:ev.scores,validation:p.validation,improvement:'Inspect opening and ending evidence; adjust boundaries or reject. Heuristic weaknesses are risk signals, not human labels.'});
-      }catch(e){failures.push({stage:'candidate_evaluation',candidateId:c.id,error:(e as Error).message});}
+      }catch(e){failures.push({stage:'candidate_evaluation',candidateId:c.id,error:failure(e)});}
     }
     if(epAI)aiEpisodeSuccesses++;
     if(provider&&baselineEpisodes.has(ep.number)){baselineAttempted++;try {
@@ -49,7 +51,7 @@ export async function analyze(ds:Dataset,options:RunOptions,onProgress:(progress
       const result=await provider.generateStructured(baselinePrompt(ep),baselineSchema,{label:`baseline-ep${ep.number}`});
       await save(`outputs/${id}/raw/baseline-ep${ep.number}-suggestions.json`,result);
       for(const b of result.promos){const c=makeCandidate(ep,b.startMs,b.endMs);c.generationMethod='direct-llm-baseline';const e=asEvaluation(b.evaluation,provider.model);baseline.push(pkg(c,e,ep));}
-    }catch(e){failures.push({stage:'baseline',episode:ep.number,error:(e as Error).message});}}
+    }catch(e){failures.push({stage:'baseline',episode:ep.number,error:failure(e)});}}
     done++;await onProgress(done/episodes.length,`Processed ${done}/${episodes.length} episodes`);
   }}
   await Promise.all(Array.from({length:concurrency},()=>worker()));
@@ -57,7 +59,7 @@ export async function analyze(ds:Dataset,options:RunOptions,onProgress:(progress
   const invalid=collected.filter(p=>p.validation.length).length,invalidBaseline=baseline.filter(p=>p.validation.length).length;
   const comparable=collected.filter(p=>baselineEpisodes.has(p.segments[0].episode));
   const metrics={episodesDiscovered:ds.report.discovered,episodesAttempted:attempted,episodesWithCandidates:episodes.filter(e=>candidates.some(c=>c.segments[0].episode===e.number)).length,events:ds.report.events,enumeratedCandidates:enumerated,evaluatedCandidates:evaluations.length,validPromos:promos.length,advancedSuggestions:collected.length,advancedInvalid:invalid,baselineSampleEpisodes:[...baselineEpisodes],comparableAdvancedSuggestions:comparable.length,comparableAdvancedInvalid:comparable.filter(p=>p.validation.length).length,baselineAttempted,baselineSuggestions:baseline.length,baselineInvalid:invalidBaseline,baselineValid:rankedBaseline.length,aiEpisodeSuccesses,advancedValidityRate:collected.length?(collected.length-invalid)/collected.length:null,baselineValidityRate:baseline.length?(baseline.length-invalidBaseline)/baseline.length:null,aiComparison:provider?'Baseline comparison uses the evenly spaced episode sample in baselineSampleEpisodes; human quality comparison pending. Advanced pipeline repairs/rejects invalid evidence; baseline validity is measured before rejection.':'Not run: no model requested. Offline output is a heuristic shortlist only.',humanReviews:0,qualityImprovement:null,elapsedMs:Date.now()-started,usage:provider instanceof RemoteProvider?provider.usage:null,cost:null,failures:failures.length,parsing:ds.report};
-  const manifest={schemaVersion:'1.0',engineVersion:'1.0',id,datasetId:ds.id,inputHashes:episodes.map(e=>({episode:e.number,sha256:e.sourceHash})),mode:options.mode,model:provider?.model??'deterministic-lexical-v1',options,startedAt:new Date(started).toISOString(),finishedAt:new Date().toISOString(),status:options.mode==='ai'&&(aiEpisodeSuccesses<episodes.length||new Set(baseline.map(p=>p.segments[0].episode)).size<baselineEpisodes.size)?'partial':'complete',semanticQualityVerified:false,humanEvaluation:'pending',multiSegmentGeneration:false};
+  const manifest={schemaVersion:'1.0',engineVersion:'1.0',id,datasetId:ds.id,inputHashes:episodes.map(e=>({episode:e.number,sha256:e.sourceHash})),mode:options.mode,model:provider?.model??'deterministic-lexical-v1',options,startedAt:new Date(started).toISOString(),finishedAt:new Date().toISOString(),status:options.mode==='ai'&&(aiEpisodeSuccesses<episodes.length||new Set(baseline.map(p=>p.segments[0].episode)).size<baselineEpisodes.size)?'partial':'complete',semanticQualityVerified:false,humanEvaluation:'pending',multiSegmentGeneration:false,...recovery};
   const run:Run={id,datasetId:ds.id,manifest:{...manifest,published:options.publish!==false&&(options.mode!=='ai'||promos.length>0)},promos,baseline:rankedBaseline,candidates,evaluations,metrics,failures};
   await save(`outputs/${id}/raw/advanced-suggestions.json`,collected);await save(`outputs/${id}/raw/baseline-suggestions.json`,baseline);
   await save(`outputs/${id}/parsed.json`,{episodes:ds.episodes,report:ds.report});await save(`outputs/${id}/candidates.json`,candidates);await save(`outputs/${id}/evaluations.json`,evaluations);

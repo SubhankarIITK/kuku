@@ -15,19 +15,25 @@ export async function acquireLease(key:string,owner:string,seconds=330):Promise<
 export async function releaseLease(key:string,owner:string){await (await cloud()).collection<{_id:string;owner:string}>('leases').deleteOne({_id:key,owner});}
 interface Quota {_id:string;used:number;windowStart:number;windowTokens:number}
 export async function rpc<T>(name:string,args:Record<string,unknown>={}):Promise<T>{
-  const db=await cloud(),model=String(args.p_model),day=new Date().toISOString().slice(0,10),id=model+':'+day;
+  const db=await cloud(),model=String(args.p_model),reservedAt=Date.now(),day=new Date(reservedAt).toISOString().slice(0,10),id=model+':'+day;
   const collection=db.collection<Quota>('quota');
   if(name==='kuku_quota_used')return ((await collection.findOne({_id:id}))?.used??0) as T;
-  if(name==='kuku_settle_tokens'){const difference=Number(args.p_actual)-Number(args.p_reserved);await collection.updateOne({_id:id},{$inc:{used:difference,windowTokens:difference}});return undefined as T;}
+  if(name==='kuku_settle_tokens'){
+    const difference=Number(args.p_actual)-Number(args.p_reserved),reservedAt=Number(args.p_reserved_at??Date.now());
+    const reservedId=model+':'+new Date(reservedAt).toISOString().slice(0,10);
+    await collection.updateOne({_id:reservedId},{$inc:{used:difference}});
+    await collection.updateOne({_id:reservedId,windowStart:{$lte:reservedAt,$gt:reservedAt-61000}},{$inc:{windowTokens:difference}});
+    return undefined as T;
+  }
   if(name!=='kuku_reserve_tokens')throw new Error('Unknown database operation');
   const owner=crypto.randomUUID(),key='quota:'+model;
   if(!await acquireLease(key,owner,10))return {blocked:false,waitMs:1000} as T;
-  try{const q=await collection.findOne({_id:id})??{_id:id,used:0,windowStart:Date.now(),windowTokens:0};
-    if(Date.now()-q.windowStart>=61000){q.windowStart=Date.now();q.windowTokens=0;}
+  try{const q=await collection.findOne({_id:id})??{_id:id,used:0,windowStart:reservedAt,windowTokens:0};
+    if(Date.now()-q.windowStart>=61000){q.windowStart=reservedAt;q.windowTokens=0;await collection.updateOne({_id:id},{$set:{windowStart:q.windowStart,windowTokens:0}});}
     const tokens=Number(args.p_tokens);
     if(q.used+tokens>Number(args.p_daily_limit))return {blocked:true,waitMs:0} as T;
     if(q.windowTokens+tokens>Number(args.p_tpm))return {blocked:false,waitMs:Math.max(100,61000-(Date.now()-q.windowStart))} as T;
-    q.used+=tokens;q.windowTokens+=tokens;await collection.replaceOne({_id:id},q,{upsert:true});return {blocked:false,waitMs:0} as T;
+    await collection.updateOne({_id:id},{$inc:{used:tokens,windowTokens:tokens},$setOnInsert:{windowStart:q.windowStart}},{upsert:true});return {blocked:false,waitMs:0,reservedAt} as T;
   }finally{await releaseLease(key,owner);}
 }
 interface FileRecord {_id:string;content?:string;gridId?:ObjectId;updatedAt:Date}
