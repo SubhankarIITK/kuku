@@ -1,26 +1,13 @@
-# Editorial workspace redesign
+# Cinematic editorial workspace
 
-## Audit
+The user-supplied reference sets the current visual direction: deep emerald, gold, cinematic scenery, serif display headings, compact metric panels and a dense shortlist table. Existing data paths and recovery behavior remain unchanged.
 
-The previous UI combined multiple rounds of CSS overrides, oversized metric treatments, repeated rounded promo cards, a separate status card, and a promotional sidebar note. Important material competed with framing: editors needed the source ranges and reasons for each cut, while headings and repeated status treatments occupied much of the first screen. Library, import and evaluation also shared too much visual vocabulary.
+The app uses actual computed counts, out-of-ten scores and saved review state. Cut titles display the saved evaluation rationale, not newly fabricated story titles. Evidence counts are the number of distinct cited source events. The screenplay-only input does not supply video thumbnails: numbered script markers identify episodes instead. Rationale, evidence and the inspector icon all open the existing source/review inspector.
 
-Preserved: readable system typography, exact timestamps, ranked evidence, source inspection, review capture, dataset filters, offline/AI distinctions, token-budget disclosure, recovery controls and export contracts.
+The backdrop is decorative artwork made with the built-in image-generation tool and delivered as a 65 KB WebP. See cinematic-asset.md for its exact prompt and provenance. It never represents confidential script content.
 
-## Direction
+Primary actions use gold, selected navigation uses emerald and status colors distinguish actual run states. CSS variables hold the palette, system body font, monospaced timecodes and sizing. Metric tints provide differentiation without inventing charts or performance claims.
 
-A cutting desk built around an editorial ledger. Paper and warm neutral surfaces, ink text, thin rules and a restrained vermilion accent. The source, evidence and decision form distinct aligned columns. Scores are numbers rather than colored quality promises. Typography is primarily Segoe UI/system sans; monospaced type is reserved for exact time ranges and row numbers. No decorative imagery, gradients or fabricated material.
+Desktop uses a compact table; narrower layouts reflow each row into labeled source, score and review areas. Episode and review filters sit behind the Filters control; search and sorting stay visible. The existing inspector preserves the actual episode timeline and source evidence. The run-limitations notice has a working Open evaluation action.
 
-The library is a list; import is a two-part workbench with source files first and settings second; evaluation is a measured comparison and failure log. Detail inspection retains the actual episode timeline. Service and quota information form a compact status strip rather than competing dashboard cards.
-
-## Implementation and access
-
-- Shared color, type, spacing and radius tokens replace the accumulated stylesheet overrides.
-- Source rows, evaluation and the evidence/review inspector are separate React components; display formatting and result types are shared.
-- At medium widths, evidence stacks within each row. At phone widths, source and decision share the top of a row, with evidence underneath. Import becomes sequential. The export dropdown stays inside the viewport.
-- Navigation names, selected-page state, progress labeling, rating pressed state, visible keyboard focus, reduced-motion preferences and export Escape/outside-click dismissal are explicit. Existing drawer focus trapping and focus restoration are retained.
-- Secondary and primary text colors were checked numerically against their intended surfaces. Primary ink exceeds 14:1 on paper; the accent exceeds 5:1 on paper; quiet rail text is at least 4.5:1. Interactive control outlines use a separate token with 3.36:1 contrast on paper.
-- Functional behavior and backend contracts are preserved. Hosted AI candidate input now respects the existing one-candidate server limit. No new inference or UI dependencies are introduced.
-
-## Verification limits
-
-Strict TypeScript and production bundling verify the component extraction. Existing analysis/API checks cover the preserved data paths. Browser control is unavailable in this session; rendered desktop/mobile appearance and keyboard interaction have not been visually exercised. Source-level layout and accessibility checks do not substitute for browser QA.
+Keyboard focus, selected-state semantics, export Escape/outside-click dismissal, rating pressed state, drawer focus management and reduced-motion support remain. TypeScript, production bundling and the existing synthetic workflow checks cover code and API regressions. Browser control is unavailable in this session, so rendered appearance and touch/keyboard interaction have not been visually exercised.

@@ -587,11 +587,19 @@ function App() {
             <div>
               <div className="eyebrow">SCREENPLAY / EDITORIAL</div>
               <h1>
-                {tab === "library"
-                  ? "Promo library"
-                  : tab === "evaluation"
-                    ? "Analysis report"
-                    : "Import & analyze"}
+                {tab === "library" ? (
+                  <>
+                    Promo <em>Library</em>
+                  </>
+                ) : tab === "evaluation" ? (
+                  <>
+                    Analysis <em>Report</em>
+                  </>
+                ) : (
+                  <>
+                    Import <em>& analyze</em>
+                  </>
+                )}
               </h1>
               <p>
                 {tab === "library"
@@ -821,11 +829,17 @@ function App() {
                   <div>
                     <strong>AI analysis finished with limitations.</strong>
                     <p>
-                      Showing saved results. Open Quality &amp; evaluation for
-                      coverage and failures. Local analysis is available without
+                      Showing saved results. Review coverage and failures in
+                      Evaluation. Deterministic analysis is available without
                       API calls.
                     </p>
                   </div>
+                  <button
+                    className="text-button"
+                    onClick={() => setTab("evaluation")}
+                  >
+                    Open evaluation <ArrowRight size={15} />
+                  </button>
                 </div>
               )}
               {tab === "library" && (
@@ -856,9 +870,17 @@ function App() {
                         result?.reviews.length ?? 0,
                         `${(result?.promos.length ?? 0) - (result?.reviews.length ?? 0)} awaiting your judgment`,
                       ],
-                    ].map(([label, value, note]) => {
+                    ].map(([label, value, note], index) => {
+                      const StatIcon = [Film, Scissors, LayoutGrid, Check][
+                        index
+                      ];
                       return (
                         <div className="stat" key={String(label)}>
+                          <StatIcon
+                            className="stat-symbol"
+                            size={24}
+                            aria-hidden="true"
+                          />
                           <div className="stat-label">{String(label)}</div>
                           <strong>{String(value)}</strong>
                           <small>{String(note)}</small>
@@ -866,74 +888,90 @@ function App() {
                       );
                     })}
                   </section>
-                  <div className="section-heading">
-                    <div>
-                      <h2>
-                        Shortlist{" "}
-                        <span className="pill">{filtered.length}</span>
-                      </h2>
-                      <p>
-                        Compare the opening, the ending and the exact source
-                        range.
-                      </p>
+                  <div className="shortlist-controls">
+                    <div className="section-heading">
+                      <div>
+                        <h2>
+                          Shortlist{" "}
+                          <span className="pill">{filtered.length}</span>
+                        </h2>
+                        <p>
+                          Compare the opening, the ending and the exact source
+                          range.
+                        </p>
+                      </div>
+                      <span className="badge warm">
+                        {result?.manifest?.mode === "ai"
+                          ? "AI judgments · not calibrated"
+                          : "Heuristic mode · AI evaluation pending"}
+                      </span>
                     </div>
-                    <span className="badge warm">
-                      {result?.manifest?.mode === "ai"
-                        ? "AI judgments · not calibrated"
-                        : "Heuristic mode · AI evaluation pending"}
-                    </span>
-                  </div>
-                  <div className="toolbar">
-                    <div className="search">
-                      <Search size={16} />
-                      <input
-                        aria-label="Search promos"
-                        placeholder="Search dialogue, moments, or characters…"
-                        value={search}
-                        onChange={(e) => {
-                          setSearch(e.target.value);
-                          setCount(12);
-                        }}
-                      />
+                    <div className="toolbar">
+                      <div className="search">
+                        <Search size={16} />
+                        <input
+                          aria-label="Search promos"
+                          placeholder="Search dialogue, moments, or characters…"
+                          value={search}
+                          onChange={(e) => {
+                            setSearch(e.target.value);
+                            setCount(12);
+                          }}
+                        />
+                      </div>
+
+                      <label className="sort-control">
+                        Sort by{" "}
+                        <select
+                          aria-label="Sort promos"
+                          value={sort}
+                          onChange={(e) => setSort(e.target.value)}
+                        >
+                          <option value="rank">Global rank</option>
+                          <option value="score">Score</option>
+                          <option value="episode">Episode</option>
+                          <option value="duration">Duration</option>
+                        </select>
+                      </label>
+                      <button
+                        aria-expanded={filters}
+                        aria-controls="shortlist-filters"
+                        className={
+                          "button filter-button " + (filters ? "pressed" : "")
+                        }
+                        onClick={() => setFilters(!filters)}
+                      >
+                        <SlidersHorizontal size={15} />
+                        Filters
+                      </button>
                     </div>
-                    <select
-                      aria-label="Filter episode"
-                      value={epFilter}
-                      onChange={(e) => {
-                        setEpFilter(e.target.value);
-                        setCount(12);
-                      }}
-                    >
-                      <option value="all">All episodes</option>
-                      {(ds?.episodeNumbers ?? []).map((n) => (
-                        <option key={n} value={n}>
-                          Episode {n}
-                        </option>
-                      ))}
-                    </select>
-                    <select
-                      aria-label="Review status"
-                      value={reviewFilter}
-                      onChange={(e) => setReviewFilter(e.target.value)}
-                    >
-                      <option value="all">All review statuses</option>
-                      <option value="unreviewed">Unreviewed</option>
-                      <option value="reviewed">Reviewed</option>
-                    </select>
-                    <button
-                      aria-expanded={filters}
-                      aria-controls="shortlist-filters"
-                      className={
-                        "button filter-button " + (filters ? "pressed" : "")
-                      }
-                      onClick={() => setFilters(!filters)}
-                    >
-                      <SlidersHorizontal size={15} />
-                      Filters
-                    </button>
                   </div>
                   {filters && (
                     <div className="filter-row" id="shortlist-filters">
+                      <select
+                        aria-label="Filter episode"
+                        value={epFilter}
+                        onChange={(e) => {
+                          setEpFilter(e.target.value);
+                          setCount(12);
+                        }}
+                      >
+                        <option value="all">All episodes</option>
+                        {(ds?.episodeNumbers ?? []).map((n) => (
+                          <option key={n} value={n}>
+                            Episode {n}
+                          </option>
+                        ))}
+                      </select>
+                      <select
+                        aria-label="Review status"
+                        value={reviewFilter}
+                        onChange={(e) => setReviewFilter(e.target.value)}
+                      >
+                        <option value="all">All review statuses</option>
+                        <option value="unreviewed">Unreviewed</option>
+                        <option value="reviewed">Reviewed</option>
+                      </select>
                       <label>
                         Minimum score{" "}
                         <input
@@ -957,10 +995,7 @@ function App() {
                         />
                         {maxDuration}s
                       </label>
-                      <button
-                        className="text-button"
-                        onClick={resetFilters}
-                      >
+                      <button className="text-button" onClick={resetFilters}>
                         Reset filters
                       </button>
                     </div>
@@ -970,24 +1005,16 @@ function App() {
                       Showing {Math.min(count, filtered.length)} of{" "}
                       {filtered.length} suggestions
                     </span>
-                    <label>
-                      Sort by{" "}
-                      <select
-                        aria-label="Sort promos"
-                        value={sort}
-                        onChange={(e) => setSort(e.target.value)}
-                      >
-                        <option value="rank">Global rank</option>
-                        <option value="score">Score</option>
-                        <option value="episode">Episode</option>
-                        <option value="duration">Duration</option>
-                      </select>
-                    </label>
                   </div>
                   <div className="ledger-heading" aria-hidden="true">
-                    <span>Cut / source range</span>
-                    <span>Editorial evidence</span>
-                    <span>Score / review</span>
+                    <span>#</span>
+                    <span>Cut / editorial rationale</span>
+                    <span>Source range</span>
+                    <span>Duration</span>
+                    <span>Score</span>
+                    <span>Evidence</span>
+                    <span>Review</span>
+                    <span />
                   </div>
                   <section
                     className="promo-list"
@@ -1021,9 +1048,15 @@ function App() {
                       </p>
                       <button
                         className="button"
-                        onClick={() => result?.promos.length ? resetFilters() : setTab("processing")}
+                        onClick={() =>
+                          result?.promos.length
+                            ? resetFilters()
+                            : setTab("processing")
+                        }
                       >
-                        {result?.promos.length ? "Clear filters" : "Import / analyze"}
+                        {result?.promos.length
+                          ? "Clear filters"
+                          : "Import / analyze"}
                       </button>
                     </div>
                   )}
