@@ -13,7 +13,6 @@ import {defaultWeights,type Dataset,type Job,type Review,type Run} from './types
 import {groqBudget,budgetMessage} from './budget.js';
 import {rawOutputArchive} from './raw-export.js';
 import {hosted,cloud,acquireLease} from './cloud.js';
-import {validSession,sessionConfigured,passwordMatches,setSession} from './session.js';
 import {activeHostedJob,createHostedJob,stepHostedJob} from './hosted-jobs.js';
 const app=express();app.disable('x-powered-by');app.use(express.json({limit:'100kb'}));
 const port=Number(process.env.PORT??3001);
@@ -23,20 +22,8 @@ app.use('/api',(req,res,next)=>{
   const origin=req.headers.origin;if(origin&&!allowedOrigins.includes(origin)){res.status(403).json({error:{code:'ORIGIN',message:'Cross-origin access blocked'}});return;}
   if(['POST','PUT','DELETE'].includes(req.method)&&req.headers['x-kuku-client']!=='local'){res.status(403).json({error:{code:'CLIENT',message:'Local client header required'}});return;}
   res.setHeader('Cache-Control','no-store');res.setHeader('X-Content-Type-Options','nosniff');
-  if(hosted&&req.path!=='/session'){
-    if(!sessionConfigured()||!process.env.MONGODB_URI){res.status(503).json({error:{code:'SETUP_REQUIRED',message:'Hosted configuration is incomplete. Set MONGODB_URI, APP_PASSWORD (12+ characters), and SESSION_SECRET (32+ characters).'}});return;}
-    if(!validSession(req)){res.status(401).json({error:{code:'SIGN_IN',message:'Sign in to access this private workspace'}});return;}
-  }
+  if(hosted&&!process.env.MONGODB_URI){res.status(503).json({error:{code:'SETUP_REQUIRED',message:'Hosted storage is not configured. Set MONGODB_URI in Vercel.'}});return;}
   next();
-});
-app.get('/api/session',(req,res)=>res.json({hosted,authenticated:validSession(req),setupReady:!hosted||(sessionConfigured()&&!!process.env.MONGODB_URI)}));
-app.post('/api/session',async(req,res)=>{
-  if(!hosted){res.json({authenticated:true});return;}if(!sessionConfigured()){res.status(503).json({error:{code:'SETUP_REQUIRED',message:'Workspace password is not configured'}});return;}
-  if(req.body?.logout===true){res.clearCookie('kuku_session',{path:'/'});res.json({authenticated:false});return;}
-  const password=z.string().min(1).max(200).parse(req.body?.password),owner=randomUUID();
-  if(!await acquireLease('login:'+createHash('sha256').update(req.ip??'unknown').digest('hex'),owner,2)){res.status(429).json({error:{code:'LOGIN_RATE',message:'Please wait a moment before trying again'}});return;}
-  if(!passwordMatches(password)){res.status(401).json({error:{code:'PASSWORD',message:'Incorrect workspace password'}});return;}
-  setSession(res);res.json({authenticated:true});
 });
 const idSchema=z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/);const episodeSchema=z.coerce.number().int().positive();
 async function dataset(id:unknown){return read<Dataset>(`data/datasets/${idSchema.parse(id)}.json`);}
@@ -45,7 +32,7 @@ app.get('/api/health',async(_req,res)=>{
   const preferredModel=process.env.LLM_MODEL??'openai/gpt-oss-120b';
   const preferred=await groqBudget(preferredModel),fallback=await groqBudget('openai/gpt-oss-20b');
   const fallbackActive=!!process.env.GROQ_API_KEY&&preferredModel==='openai/gpt-oss-120b'&&preferred.blocked&&!fallback.blocked;
-  res.json({ok:true,private:true,hosted,providers:{gemini:!!process.env.GEMINI_API_KEY,groq:!!process.env.GROQ_API_KEY},groqBudget:preferred,groqBudgets:[preferred,...(fallback.model===preferred.model?[]:[fallback])],preferredModel,fallbackActive,providerCheck:await read('data/provider-check.json').catch(()=>null),defaultProvider:process.env.LLM_PROVIDER??'groq',defaultModel:fallbackActive?fallback.model:preferredModel});
+  res.json({ok:true,private:!hosted,hosted,providers:{gemini:!!process.env.GEMINI_API_KEY,groq:!!process.env.GROQ_API_KEY},groqBudget:preferred,groqBudgets:[preferred,...(fallback.model===preferred.model?[]:[fallback])],preferredModel,fallbackActive,providerCheck:await read('data/provider-check.json').catch(()=>null),defaultProvider:process.env.LLM_PROVIDER??'groq',defaultModel:fallbackActive?fallback.model:preferredModel});
 });
 app.get('/api/datasets',async(_req,res)=>{const datasets=await Promise.all((await list('data/datasets')).map(f=>read<Dataset>(`data/datasets/${f}`)));res.json(datasets.map(({episodes,...d})=>({...d,episodeCount:episodes.length,episodeNumbers:episodes.map(e=>e.number)})));});
 const upload=multer({storage:multer.memoryStorage(),limits:{fileSize:15_000_000,files:1}});

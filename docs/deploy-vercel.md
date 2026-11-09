@@ -37,8 +37,6 @@ Set these **server-only** environment variables for Production and, if wanted, P
 | `STORAGE_BACKEND` | `mongodb` |
 | `MONGODB_URI` | Your Atlas connection URI |
 | `MONGODB_DB` | `kuku_promo` |
-| `APP_PASSWORD` | A generated password of at least 12 characters for the private workspace |
-| `SESSION_SECRET` | A different generated random secret of at least 32 characters |
 | `LLM_PROVIDER` | `groq` |
 | `GROQ_API_KEY` | Your Groq key |
 | `LLM_MODEL` | `openai/gpt-oss-120b` |
@@ -51,25 +49,27 @@ Set these **server-only** environment variables for Production and, if wanted, P
 | `CANDIDATES_PER_EPISODE` | `1` |
 | `BASELINE_SAMPLE_SIZE` | `5` |
 
-Do not prefix secrets with `VITE_`. Do not add a local `.env` file to Git. Password and secret values can be generated separately with `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"` on your own computer; store them privately.
+Do not prefix secrets with `VITE_`. Do not add a local `.env` file to Git.
 
-Deploy. The hosted UI first asks for the workspace password. Missing authentication or database configuration fails closed; it does not expose the local datasets.
+Deploy. The workspace opens directly, with no password, login form or session configuration. Only `MONGODB_URI` is required for hosted storage; `APP_PASSWORD` and `SESSION_SECRET` are unused and may be removed from Vercel.
+
+**Access:** everyone who can reach the deployment can read shared scripts/results, upload files, save reviews and start analysis against the configured Groq quota. Origin checks and the client header are request guards, not authentication. Use only material you intend to expose to visitors. Existing confidential local data is never included in the deployment.
 
 ## 4. Verify your deployment
 
-1. Open the deployment URL and sign in with `APP_PASSWORD`.
+1. Open the deployment URL. The workspace should load directly.
 2. Upload a **synthetic test pack first**. The browser uploads up to 3 MB per request, keeping each request below Vercel's function payload limit. ZIPs still have the application's 15 MB compressed / 30 MB expanded limits.
 3. Keep the page open during processing. The browser advances one episode per API request. Job state is persisted in Atlas; closing the page pauses advancement, and opening that dataset again resumes it. This is browser-driven resumable processing, not a permanently running background server.
 4. Refresh and confirm the same dataset/results remain. A new Vercel instance must see the same records.
 5. Download **Export > Download raw output (.zip)**. Hosted downloads stream from the API and include saved responses and metadata. Downloads make no Groq calls.
 6. Run AI on authorized input only. The actual model ID is recorded; cached responses are reused. Shared database quota reservations and leases prevent multiple Vercel instances from independently spending the same local token budget.
-7. Open the deployment in a private browser window: protected API routes should return `401` before sign-in. Session cookies are HttpOnly, Secure and SameSite Strict. This is a shared private-workspace password, not individual-user accounts or enterprise identity.
+7. Open the deployment in a private browser window: it should open without a password. Confirm foreign-origin requests remain blocked. This is a shared workspace; it does not isolate visitors' data.
 
-Existing local results stay on your computer. To host them, upload the original authorized ZIP through the protected app and analyze it there. Do not bundle private results into the deployment. A local usage ledger is not automatically imported into Atlas; the hosted budget starts independently, while Groq's account-wide limits still apply. Avoid running local and hosted analyses concurrently against the same free quota.
+Existing local results stay on your computer. To host them, upload the original authorized ZIP through the app and analyze it there. Do not bundle private results into the deployment. A local usage ledger is not automatically imported into Atlas; the hosted budget starts independently, while Groq's account-wide limits still apply. Avoid running local and hosted analyses concurrently against the same free quota.
 
 ## Troubleshooting
 
-- **Hosted setup is incomplete:** verify `MONGODB_URI`, `APP_PASSWORD` and `SESSION_SECRET`, then redeploy after environment changes.
+- **Hosted setup is incomplete:** verify `MONGODB_URI`, then redeploy after environment changes.
 - **MongoDB connection timeout:** confirm the database user, URI/password encoding, cluster availability and Atlas network access.
 - **413 on upload:** use the hosted UI, which sends 3 MB chunks; do not post a 15 MB multipart request directly to the Vercel function.
 - **Function timeout:** reopen the dataset to resume persisted work. Keep one AI candidate per episode, one retry and the 45-second provider timeout. Already cached responses can be reused; in-flight provider requests can still fail or consume tokens.
