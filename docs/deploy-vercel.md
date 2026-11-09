@@ -26,7 +26,7 @@ Import the repository into a new Vercel project. Use the repository root as the 
 | Framework preset | Other (the repository's `vercel.json` handles routing) |
 | Build command | `npm run build` |
 | Output directory | `dist` |
-| Install command | `npm ci` |
+| Install command | `npm ci --include=dev` (also set in `vercel.json`) |
 | Node.js | 22.x |
 | Fluid Compute | Enabled; the API requests up to 300 seconds |
 
@@ -69,6 +69,7 @@ Existing local results stay on your computer. To host them, upload the original 
 
 ## Troubleshooting
 
+- **`tsc: command not found`:** deploy the latest `main`, whose install command explicitly includes build dependencies. Set Root Directory to the repository root, not `backend` or `frontend`. Remove a dashboard Install Command override that skips installation or uses `--omit=dev`; use `npm ci --include=dev`. Redeploy without the previous build cache. Vercel needs TypeScript and Vite during the build even when the runtime uses production mode.
 - **Hosted setup is incomplete:** verify `MONGODB_URI`, then redeploy after environment changes.
 - **MongoDB connection timeout:** confirm the database user, URI/password encoding, cluster availability and Atlas network access.
 - **413 on upload:** use the hosted UI, which sends 3 MB chunks; do not post a 15 MB multipart request directly to the Vercel function.
